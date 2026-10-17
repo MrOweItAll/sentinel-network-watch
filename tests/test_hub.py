@@ -154,6 +154,13 @@ class HubTests(unittest.TestCase):
         self.assertEqual(result['alerts_and_adguard']['checks'],{'docker_service':True})
         self.assertNotIn('FAKE_',json.dumps(result))
 
+    def test_unreadable_optional_legacy_status_is_unavailable(self):
+        with patch.object(hub.Path,'exists',side_effect=PermissionError('FAKE_PRIVATE_PATH')):
+            result=self.h.existing_services()
+        self.assertFalse(result['alerts_and_adguard']['available'])
+        self.assertFalse(result['alerts_and_adguard']['fresh'])
+        self.assertNotIn('FAKE_',json.dumps(result))
+
     def test_failed_later_signature_cannot_inherit_recognition_or_approval(self):
         self.h.tick();r=self.h.relationships()[0]
         self.h.recognize(r['review_id'],expected_app_context_key=r['app_context_key'])

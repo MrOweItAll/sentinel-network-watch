@@ -294,8 +294,8 @@ class Hub:
     def existing_services(self):
         """Read a bounded legacy status summary, never its configuration or topic."""
         path = Path('/var/lib/sentinel-alerts/status.json')
-        if not path.exists(): return {}
         try:
+            if not path.exists(): return {}
             value = read_private(path,65536)
             checked = value.get('checked_at')
             if type(checked) not in (int,float) or not math.isfinite(checked): raise ValueError
