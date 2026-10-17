@@ -127,6 +127,22 @@ class DashboardTests(unittest.TestCase):
         for query in ('limit=201','offset=-1','offset=50001','limit=1&limit=2','path=secret','limit=not-a-number'):
             with self.subTest(query=query):self.assertEqual(self.request('/api/relationships?'+query).status,400)
 
+    def test_empty_get_queries_work_with_python310_strict_parser_behavior(self):
+        self.login();original=d.parse_qs
+        def python310_parser(query,**options):
+            if not query and options.get('strict_parsing'):
+                raise ValueError('bad query field: empty fixture')
+            return original(query,**options)
+        with patch.object(d,'parse_qs',side_effect=python310_parser) as parser:
+            for path in ('/api/session','/api/session?','/api/overview','/api/relationships',
+                         '/api/report.json','/api/report.csv'):
+                with self.subTest(path=path):self.assertEqual(self.request(path).status,200)
+            self.assertEqual(self.request('/api/not-a-route').status,404)
+            parser.assert_not_called()
+            self.assertEqual(self.request('/api/relationships?limit=20&offset=0').status,200)
+            parser.assert_called_once_with('limit=20&offset=0',keep_blank_values=True,strict_parsing=True)
+            self.assertEqual(self.request('/api/relationships?limit').status,400)
+
     def test_request_bounds_and_no_generic_file_or_command_routes(self):
         self.login()
         self.assertEqual(self.request('/api/tick',method='POST',raw=b'x'*(d.MAX_BODY+1)).status,413)

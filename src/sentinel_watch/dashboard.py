@@ -307,7 +307,9 @@ class DashboardApp:
             ident,session=self._session(values)
             if session is None:return self._response(401,{'error':'E_LOGIN_REQUIRED'})
             if method=='GET':
-                query=parse_qs(url.query,keep_blank_values=True,strict_parsing=True)
+                # Python 3.10 rejects an empty string in strict parse_qs.
+                # An absent query is empty; nonempty input stays strictly parsed.
+                query=parse_qs(url.query,keep_blank_values=True,strict_parsing=True) if url.query else {}
                 if path=='/api/session' and not query:return self._response(200,{'ok':True,'csrf_token':session['csrf']})
                 if path=='/api/overview' and not query:return self._response(200,_safe_hub(self.hub.overview()))
                 if path=='/api/relationships':
