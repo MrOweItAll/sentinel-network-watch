@@ -1,0 +1,11 @@
+[Unit]
+Description=Run optional Sentinel router observations every minute
+
+[Timer]
+OnCalendar=*-*-* *:*:20
+RandomizedDelaySec=5
+Persistent=true
+Unit=sentinel-router.service
+
+[Install]
+WantedBy=timers.target

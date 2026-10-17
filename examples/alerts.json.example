@@ -1,0 +1,5 @@
+{
+  "base_url": "https://ntfy.example.com",
+  "topic": "REPLACE_WITH_PRIVATE_TOPIC",
+  "health_profile": "outbox"
+}

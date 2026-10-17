@@ -1,0 +1,11 @@
+[
+    {
+      "actor_key": "example-device",
+      "app_context_key": "example-reviewed-binary-hash-and-publisher-context",
+      "kind": "native_tcp",
+      "transport": "TCP",
+      "destination_address": "192.0.2.20",
+      "destination_port": 443,
+      "evidence": {"direction": "unknown", "synthetic": true}
+    }
+]

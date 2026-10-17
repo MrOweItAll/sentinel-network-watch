@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sentinel-network-watch"
+version = "0.1.0a1"
+description = "Service health, durable ntfy alerts, optional router observations and endpoint review"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {file = "LICENSE"}
+authors = [{name = "Sentinel Network Watch contributors"}]
+dependencies = []
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Programming Language :: Python :: 3",
+  "Operating System :: POSIX :: Linux",
+  "Operating System :: Microsoft :: Windows",
+]
+
+[project.scripts]
+sentinel-network-watch = "sentinel_watch.cli:main"
+
+[project.urls]
+Repository = "https://github.com/mroweitall/sentinel-network-watch"
+
+[tool.setuptools.packages.find]
+where = ["src"]

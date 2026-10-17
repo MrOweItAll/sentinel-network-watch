@@ -1,0 +1,27 @@
+[Unit]
+Description=Sentinel durable alert outbox (one iteration)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/bin/sentinel-network-watch alerts tick
+Environment=PYTHONDONTWRITEBYTECODE=1
+UMask=0077
+StateDirectory=sentinel-alerts
+StateDirectoryMode=0700
+TimeoutStartSec=120
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/sentinel-alerts

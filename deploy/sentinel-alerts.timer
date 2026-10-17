@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the Sentinel alert outbox every minute
+
+[Timer]
+OnCalendar=*-*-* *:*:00
+RandomizedDelaySec=10
+Persistent=true
+Unit=sentinel-alerts.service
+
+[Install]
+WantedBy=timers.target
