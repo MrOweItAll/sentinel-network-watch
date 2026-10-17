@@ -119,7 +119,8 @@ def doctor():
         "native_snapshot_platform": windows,
         "manual_review_available": True,
         "network_contacted": False,
-        "continuous_connection_intake": False,
+        "continuous_connection_intake": "optional_linux_hub",
+        "complete_network_visibility": False,
     }
 
 
@@ -127,6 +128,7 @@ def _parser():
     parser = SafeArgumentParser(description="Local observations, manual connection review, and durable ntfy alerts (alpha).")
     parser.add_argument("--version", action="version", version=__version__)
     sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("hub", help="Autonomous Linux hub with authenticated local dashboard", add_help=False)
     sub.add_parser("doctor", help="Offline capability summary; no credential reads or network requests")
     config = sub.add_parser("init-config", help="Create private ntfy config using hidden local prompts")
     config.add_argument("--config", type=Path, default=Path("/etc/sentinel-alerts/config.json"))
@@ -145,7 +147,7 @@ def _parser():
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
-    delegates = {"alerts": "alerts", "review": "review", "windows-snapshot": "windows"}
+    delegates = {"alerts": "alerts", "review": "review", "windows-snapshot": "windows", "hub": "hub_cli"}
     if argv and argv[0] in delegates:
         return importlib.import_module("." + delegates[argv[0]], __package__).main(argv[1:])
     if argv and argv[0] == "router":

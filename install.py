@@ -11,9 +11,12 @@ import stat
 import sys
 
 MODULES = ("__init__.py", "__main__.py", "cli.py", "arguments.py", "alerts.py", "router.py", "router_runner.py",
-           "review.py", "storage.py", "windows.py", "privacy.py")
-UNITS = ("sentinel-alerts.service", "sentinel-alerts.timer", "sentinel-router.service", "sentinel-router.timer")
-EXAMPLES = ("alerts.json.example", "router.json.example", "review-input.json.example")
+           "review.py", "storage.py", "windows.py", "privacy.py", "hub.py", "hub_cli.py", "linux.py", "dashboard.py", "backup.py", "hub_backup.py")
+LEGACY_UNITS = ("sentinel-alerts.service", "sentinel-alerts.timer", "sentinel-router.service", "sentinel-router.timer")
+HUB_UNITS = ("sentinel-hub.service", "sentinel-hub-watchdog.service", "sentinel-hub-watchdog.timer")
+UNITS = LEGACY_UNITS + HUB_UNITS
+EXAMPLES = ("alerts.json.example", "router.json.example", "review-input.json.example", "hub.json.example")
+DESKTOPS = ("sentinel-hub.desktop",)
 
 
 class InstallError(Exception):
@@ -74,7 +77,7 @@ def source_bytes(path):
     return data
 
 
-def _install(prefix=None, *, source_root=None):
+def _install(prefix=None, *, source_root=None, hub_only=False):
     require(sys.version_info >= (3, 10), "E_PYTHON_VERSION")
     staged = prefix is not None
     if not staged:
@@ -82,9 +85,11 @@ def _install(prefix=None, *, source_root=None):
     root = Path(os.path.abspath(prefix)) if staged else Path("/")
     require(not staged or root != Path(root.anchor), "E_STAGING_ROOT")
     source = Path(source_root or Path(__file__).resolve().parent)
+    selected_units = HUB_UNITS if hub_only else UNITS
     for relative in ([Path("src/sentinel_watch") / name for name in MODULES]
-                     + [Path("deploy") / name for name in UNITS]
-                     + [Path("examples") / name for name in EXAMPLES]):
+                     + [Path("deploy") / name for name in selected_units]
+                     + [Path("examples") / name for name in EXAMPLES]
+                     + [Path("deploy") / name for name in DESKTOPS]):
         check_chain(source / relative, source)
     # Refuse a staged prefix that resolves elsewhere through an existing link.
     for parent in (root, *root.parents):
@@ -97,11 +102,16 @@ def _install(prefix=None, *, source_root=None):
         "from sentinel_watch.cli import main\nraise SystemExit(main())\n"
     ).encode()
     files = [(package / name, source_bytes(source / "src/sentinel_watch" / name), 0o644) for name in MODULES]
-    files += [(root / "etc/systemd/system" / name, source_bytes(source / "deploy" / name), 0o644) for name in UNITS]
+    files += [(root / "etc/systemd/system" / name, source_bytes(source / "deploy" / name), 0o644) for name in selected_units]
     files += [(root / "usr/share/sentinel-network-watch/examples" / name,
                source_bytes(source / "examples" / name), 0o644) for name in EXAMPLES]
     files.append((root / "usr/local/bin/sentinel-network-watch", launcher, 0o755))
-    private = [root / p for p in ("etc/sentinel-alerts", "etc/sentinel-router", "var/lib/sentinel-alerts", "var/lib/sentinel-router")]
+    files += [(root / "usr/share/applications" / name, source_bytes(source / "deploy" / name), 0o644)
+              for name in DESKTOPS]
+    private_paths = ("etc/sentinel-hub", "var/lib/sentinel-hub")
+    if not hub_only:
+        private_paths += ("etc/sentinel-alerts", "etc/sentinel-router", "var/lib/sentinel-alerts", "var/lib/sentinel-router")
+    private = [root / p for p in private_paths]
     # Validate the entire destination before the first write. Existing differing files are preserved.
     for path, data, mode in files:
         check_chain(path, root, root_owned=not staged)
@@ -133,16 +143,19 @@ def _install(prefix=None, *, source_root=None):
         if os.name == "posix":
             os.chmod(path, mode)
         written += 1
-    return {"ok": True, "staged": staged, "files_installed": written,
-            "configuration_created": False, "timers_enabled": False, "system_commands_run": False}
+    return {"ok": True, "staged": staged, "files_installed": written, "hub_only": hub_only,
+            "configuration_created": False, "dashboard_auth_created": False,
+            "hub_service_enabled": False, "timers_enabled": False,
+            "legacy_units_included": not hub_only, "browser_opened": False,
+            "system_commands_run": False}
 
 
-def install(prefix=None, *, source_root=None):
+def install(prefix=None, *, source_root=None, hub_only=False):
     # pathlib creates intermediate parents with the process umask. A root
     # launcher must never import through a newly world/group-writable parent.
     previous = os.umask(0o022) if os.name == "posix" else None
     try:
-        return _install(prefix, source_root=source_root)
+        return _install(prefix, source_root=source_root, hub_only=hub_only)
     finally:
         if previous is not None:
             os.umask(previous)
@@ -151,9 +164,11 @@ def install(prefix=None, *, source_root=None):
 def main(argv=None):
     parser = SafeArgumentParser(description=__doc__)
     parser.add_argument("--prefix", type=Path, help="Copy into an isolated staging root; no root or Linux requirement")
+    parser.add_argument("--hub-only", action="store_true",
+                        help="Install the hub unit without inspecting or changing existing alert/router units")
     args = parser.parse_args(argv)
     try:
-        result = install(args.prefix)
+        result = install(args.prefix, hub_only=args.hub_only)
         print(json.dumps(result, sort_keys=True))
         return 0
     except InstallError as error:

@@ -27,3 +27,9 @@ state/
 captures/
 fixture-*/
 .sentinel-tests-*/
+
+# Local hub credentials and private migration archives
+dashboard-auth.json
+backups/
+*.tar.gpg
+*.tar.gpg.json

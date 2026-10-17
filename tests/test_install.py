@@ -35,11 +35,19 @@ class InstallerTests(unittest.TestCase):
         self.assertTrue(report["ok"])
         self.assertFalse(report["timers_enabled"])
         self.assertFalse(report["configuration_created"])
+        self.assertFalse(report["dashboard_auth_created"])
+        self.assertFalse(report["hub_service_enabled"])
+        self.assertFalse(report["browser_opened"])
         self.assertFalse(report["system_commands_run"])
         for name in installer.MODULES:
             self.assertTrue((self.prefix / "opt/sentinel-network-watch/sentinel_watch" / name).is_file())
         self.assertFalse((self.prefix / "etc/sentinel-alerts/config.json").exists())
+        self.assertFalse((self.prefix / "etc/sentinel-hub/config.json").exists())
+        self.assertFalse((self.prefix / "etc/sentinel-hub/dashboard-auth.json").exists())
+        self.assertTrue((self.prefix / "etc/systemd/system/sentinel-hub.service").is_file())
+        self.assertTrue((self.prefix / "usr/share/applications/sentinel-hub.desktop").is_file())
         self.assertFalse((self.prefix / "etc/systemd/system/timers.target.wants").exists())
+        self.assertFalse((self.prefix / "etc/systemd/system/multi-user.target.wants").exists())
         self.assertEqual(installer.install(self.prefix)["files_installed"], 0)
 
     def test_staged_launcher_runs_doctor(self):
@@ -52,7 +60,8 @@ class InstallerTests(unittest.TestCase):
         # Exercise lazy imports from the installed package too: doctor alone
         # would not detect a missing module required by a delegated command.
         for arguments in (["alerts", "--help"], ["router", "collect", "--help"],
-                          ["review", "--help"], ["windows-snapshot", "--help"]):
+                          ["review", "--help"], ["windows-snapshot", "--help"],
+                          ["hub", "--help"], ["hub", "serve", "--help"]):
             help_result = subprocess.run([sys.executable, "-B", str(self.prefix / "usr/local/bin/sentinel-network-watch"), *arguments],
                                          capture_output=True, text=True)
             self.assertEqual(help_result.returncode, 0, arguments)
@@ -90,6 +99,67 @@ class InstallerTests(unittest.TestCase):
             self.assertFalse((self.prefix / relative).stat().st_mode & 0o022, relative)
         for relative in ("etc/sentinel-alerts", "etc/sentinel-router", "var/lib/sentinel-alerts", "var/lib/sentinel-router"):
             self.assertEqual((self.prefix / relative).stat().st_mode & 0o777, 0o700)
+        for relative in ("etc/sentinel-hub", "var/lib/sentinel-hub"):
+            self.assertEqual((self.prefix / relative).stat().st_mode & 0o777, 0o700)
+
+    def test_hub_only_preserves_differing_original_units(self):
+        originals = {}
+        for name in installer.LEGACY_UNITS:
+            target = self.prefix / "etc/systemd/system" / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            originals[target] = ("existing independently managed " + name).encode()
+            target.write_bytes(originals[target])
+        with mock.patch.object(subprocess, "run", side_effect=AssertionError("system command")):
+            result = installer.install(self.prefix, hub_only=True)
+        self.assertTrue(result["hub_only"])
+        self.assertFalse(result["legacy_units_included"])
+        for target, content in originals.items():
+            self.assertEqual(target.read_bytes(), content)
+        self.assertTrue((self.prefix / "etc/systemd/system/sentinel-hub.service").is_file())
+        self.assertTrue((self.prefix / "var/lib/sentinel-hub").is_dir())
+        self.assertFalse((self.prefix / "var/lib/sentinel-alerts").exists())
+        self.assertFalse((self.prefix / "var/lib/sentinel-router").exists())
+        self.assertEqual(installer.install(self.prefix, hub_only=True)["files_installed"], 0)
+
+    def test_hub_only_conflict_refuses_before_new_writes(self):
+        target = self.prefix / "etc/systemd/system/sentinel-hub.service"
+        target.parent.mkdir(parents=True)
+        target.write_bytes(b"existing hub unit")
+        with self.assertRaisesRegex(installer.InstallError, "E_EXISTING_FILE"):
+            installer.install(self.prefix, hub_only=True)
+        self.assertEqual(target.read_bytes(), b"existing hub unit")
+        self.assertFalse((self.prefix / "opt").exists())
+
+    def test_hub_unit_and_desktop_keep_narrow_boundary(self):
+        unit = (ROOT / "deploy/sentinel-hub.service").read_text(encoding="utf-8")
+        self.assertIn("ExecStart=/usr/local/bin/sentinel-network-watch hub serve --config /etc/sentinel-hub/config.json", unit)
+        self.assertEqual([line for line in unit.splitlines() if line.startswith("ReadWritePaths=")],
+                         ["ReadWritePaths=/var/lib/sentinel-hub"])
+        self.assertIn("CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_SYS_PTRACE", unit)
+        self.assertNotIn("NET_ADMIN", unit)
+        self.assertNotIn("NET_RAW", unit)
+        self.assertIn("ProtectSystem=strict", unit)
+        self.assertIn("ProtectProc=default", unit)
+        desktop = (ROOT / "deploy/sentinel-hub.desktop").read_text(encoding="utf-8")
+        self.assertEqual([line for line in desktop.splitlines() if line.startswith("Exec=")],
+                         ["Exec=xdg-open http://127.0.0.1:8765/"])
+        self.assertNotIn("sudo", desktop)
+        self.assertNotIn("token", desktop.lower())
+
+    def test_hub_example_rejects_unconfigured_network(self):
+        source = str(ROOT / "src")
+        with mock.patch.object(sys, "path", [source, *sys.path]):
+            from sentinel_watch import hub
+        example = json.loads((ROOT / "examples/hub.json.example").read_text(encoding="utf-8"))
+        with mock.patch.object(hub, "read_private", return_value=example):
+            with self.assertRaisesRegex(hub.HubError, "E_HUB_CONFIG"):
+                hub.load_config(Path("not-opened-fixture.json"))
+        # Isolate the network guard from the other deliberately invalid placeholders.
+        example["expected_host_fingerprint"] = "a" * 64
+        example["expected_gateway_fingerprint"] = "b" * 64
+        with mock.patch.object(hub, "read_private", return_value=example):
+            with self.assertRaisesRegex(hub.HubError, "E_HUB_CONFIG"):
+                hub.load_config(Path("not-opened-fixture.json"))
 
     def test_public_readonly_source_may_be_hardlinked(self):
         source = Path(self.temporary.name) / "public.py"

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sentinel-network-watch"
-version = "0.1.0a1"
+version = "0.2.0a1"
 description = "Service health, durable ntfy alerts, optional router observations and endpoint review"
 readme = "README.md"
 requires-python = ">=3.10"

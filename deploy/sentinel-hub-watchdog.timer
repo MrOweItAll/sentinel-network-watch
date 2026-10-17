@@ -1,0 +1,11 @@
+[Unit]
+Description=Check the Sentinel hub and retry queued alerts independently
+
+[Timer]
+OnCalendar=minutely
+RandomizedDelaySec=20
+Persistent=true
+Unit=sentinel-hub-watchdog.service
+
+[Install]
+WantedBy=timers.target

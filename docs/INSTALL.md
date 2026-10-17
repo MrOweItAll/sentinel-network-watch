@@ -2,7 +2,7 @@
 
 ## Requirements and installation paths
 
-Python 3.10+ and its standard library are sufficient. The host publisher is intended for Linux with systemd; the copy installer requires Linux root. The installer does not run apt, pip, Docker, systemctl, or network commands. Keep the distribution's system Python intact; [Ubuntu's Python guidance](https://ubuntu.com/developers/docs/howto/python-setup/) describes isolated environments for additional packages.
+Python 3.10+ and its standard library are sufficient for collection, review and alerts. Optional encrypted hub backups additionally require a separately installed `/usr/bin/gpg`; Sentinel does not install it. The host publisher is intended for Linux with systemd; the copy installer requires Linux root. The installer does not run apt, pip, Docker, systemctl, or network commands. Keep the distribution's system Python intact; [Ubuntu's Python guidance](https://ubuntu.com/developers/docs/howto/python-setup/) describes isolated environments for additional packages.
 
 Run from a reviewed checkout or extracted release:
 
@@ -18,9 +18,13 @@ sentinel-network-watch doctor
 | `/opt/sentinel-network-watch/sentinel_watch` | Curated Python modules |
 | `/usr/local/bin/sentinel-network-watch` | Python launcher |
 | `/etc/systemd/system/sentinel-{alerts,router}.{service,timer}` | Disabled deployment units |
+| `/etc/systemd/system/sentinel-hub.service` | Disabled autonomous worker/local UI service |
+| `/etc/systemd/system/sentinel-hub-watchdog.{service,timer}` | Disabled independent liveness/alert-retry units |
+| `/usr/share/applications/sentinel-hub.desktop` | Normal-user browser launcher; no embedded secret |
 | `/usr/share/sentinel-network-watch/examples` | Public placeholders only |
 | `/etc/sentinel-alerts`, `/etc/sentinel-router` | Private config directories; no config created |
 | `/var/lib/sentinel-alerts`, `/var/lib/sentinel-router` | Private persistent state |
+| `/etc/sentinel-hub`, `/var/lib/sentinel-hub` | Private hub config/auth and independent state/outbox |
 
 The installer accepts identical existing files and refuses differing files, symlinks/reparse points, or unsafe private directories. It does not merge an existing installation. A copied unit file does not imply the corresponding timer is active. Existing installations must be reviewed before changing files; see [recovery](RECOVERY.md).
 
@@ -32,6 +36,61 @@ python3 ./staging-root/usr/local/bin/sentinel-network-watch doctor
 ```
 
 All installed paths are contained inside that prefix; no system commands run. This is a file-layout test, not an operational systemd installation.
+
+## Autonomous hub and local dashboard
+
+The hub is a separate long-running service. It collects at a configured 60-second interval and presents normal review/report pages on **127.0.0.1:8765 only**. No ChatGPT session is required after setup. The root service reads process/socket identity evidence and optional existing router state; it cannot repair networking, change firewall/DNS/router policy, execute shell commands from the UI or turn a review approval into enforcement.
+
+For an existing Sentinel installation, preserve its current alert/router units:
+
+```sh
+sudo python3 install.py --hub-only
+```
+
+This copies the curated package, hub/watchdog units, desktop launcher and public examples; it creates only the hub's private config/state directories. It does not inspect or replace the original alert/router unit paths, change their private configuration/state, run a package manager, reload systemd, start a browser or enable anything. Existing differing package/launcher/hub files still cause a refusal before any new file is written. Review an update/migration rather than forcing replacement.
+
+On a clean host, the default full copy also installs the standalone alert/router units, still disabled. Configure the publisher using `init-config` if needed; an existing private `/etc/sentinel-alerts/config.json` can be read without being copied into hub state. The hub creates its own outbox under `/var/lib/sentinel-hub/alerts`; it does not write the legacy alert outbox or poll the router itself. If router input is selected, the separately scheduled router collector remains responsible for producing that source state.
+
+Initialize at a native local terminal:
+
+```sh
+sudo sentinel-network-watch hub init --config /etc/sentinel-hub/config.json --network-label 'Home' --alerts-config /etc/sentinel-alerts/config.json
+```
+
+Optional arguments include `--state-dir /var/lib/sentinel-hub` and `--router-state-dir /var/lib/sentinel-router`. Initialization derives the local host/network binding and requests a separate dashboard password through hidden local entry. Never silently reuse the administrator password, put credentials in arguments/environment variables, or commit the generated configuration/auth/state. The username defaults to `sentinel`. The auth file is `/etc/sentinel-hub/dashboard-auth.json`, root-owned mode 0600, holding a salted PBKDF2-SHA256 hash rather than plaintext. Hub directories are private mode 0700.
+
+`examples/hub.json.example` illustrates the keys but intentionally contains a zero network UUID and invalid identity placeholders. A real initialization must replace those with verified bindings; loading that unconfigured sample must fail. Preserve the original binding on migration. A different host/network needs new verified attribution rather than automatically inheriting old approvals. Router import must not reuse a household's feed after a gateway/network change; investigate a binding gap instead of bypassing it.
+
+Run a single foreground `hub serve --config /etc/sentinel-hub/config.json` while the systemd unit is disabled, then open `http://127.0.0.1:8765/` from the same host. Alternatively use the installed application-menu entry. It runs only `xdg-open` with that fixed loopback URL. A remote Windows browser's localhost is its own machine, and no SSH tunnel or LAN listener is created by this installation.
+
+The normal UI uses the separate password, session cookies and CSRF protection for mutations. Its existing-service summary reports local state without granting service control. The AdGuard link opens its separate local interface at `http://127.0.0.1:3000`, with separate credentials. Loopback is not per-user isolation; keep the password/auth file private even on a shared machine. The UI exposes bounded review operations, not a root command executor. Review both source identity and evidence before choosing an explicit endpoint duration. Device/binary recognition alone is not an endpoint grant or a suppression rule. Saved case IDs are scoped to their source/network; copying another machine's case is not authorization on this host.
+
+The unit runs as root to correlate other users' `/proc` socket FD/executable ownership. Its only retained capabilities are `CAP_SYS_PTRACE` and `CAP_DAC_READ_SEARCH` for those read operations; it has no `NET_ADMIN` or `NET_RAW`. Its filesystem is read-only except hub state, home directories remain read-only for executable hashing, and `/proc` uses the default host view. Private devices/temp, no-new-privileges and other systemd restrictions remain enabled. Configuration/legacy router state are read-only; dashboard authentication does not grant arbitrary root operations. Inspect the unit before deployment on a system with different `/proc` or security policies; unavailable attribution must remain an explicit gap.
+
+Linux evidence is a non-atomic TCP4/TCP6 snapshot in the collector's current network namespace. It includes established peer rows and listening bindings, not UDP peers, namespace traversal, initiation direction, scripts/arguments/environment, payloads or complete history. Collection bounds include rows/PIDs/FDs/hash bytes/time; short-lived or inaccessible/racing/shared owners can be missed or remain unknown. Optional router history has its own bounded-window/schema limits. Observation counts are not sessions, requests or byte totals. Run history is bounded summary history. The newest 10,000 completed hub-owned replay IDs are retained, with unfinished intake records kept for crash recovery. Imported observation IDs, case aggregates, cumulative sightings, decisions and pending notices are preserved. Router watermarks avoid re-counting unchanged retained rows after compaction; Linux replay older than the ID window cannot be detected. Unattributed endpoint/local/UID buckets are explicitly unapprovable and may contain different processes. Capacity limits produce a gap; they are not permission to delete unreviewed cases. Verify retained gaps/capacity status in the UI rather than interpreting an empty page as an all-clear.
+
+After the foreground/UI/alert checks pass, stop that process, then explicitly enable the service:
+
+```sh
+sudo systemctl daemon-reload
+sudo systemctl enable --now sentinel-hub.service sentinel-hub-watchdog.timer
+systemctl status sentinel-hub.service sentinel-hub-watchdog.timer --no-pager
+```
+
+The independent watchdog checks hub freshness and service state and retries the hub's durable alert outbox on a separate minute timer. It can report a stopped/stale hub while the host and Internet still work; it cannot report complete host, power or Internet loss. Pause its own timer/service deliberately during intentional hub maintenance and resume afterward.
+
+Do not run the foreground and systemd instances concurrently. Closing the browser does not stop the service. The host must remain awake; complete power/Internet loss cannot be announced during the outage without a separate outside observer. No reboot, package installation or network policy change is performed by these hub setup tools.
+
+### Optional encrypted hub backup
+
+The dashboard includes an **Encrypted backup** form. It requires [GnuPG](https://gnupg.org/documentation/manuals/gnupg24/gpg.1.html) at `/usr/bin/gpg`; installing that dependency is a separate administrator action. Collection, review and alerts work without it.
+
+1. Log in locally and enter the same new passphrase of at least 16 characters in both hidden fields. Keep it separately; losing it prevents recovery of the archive.
+2. Choose **Create encrypted backup**. The backend locks hub activity, snapshots all hub SQLite databases through the backup API, encrypts the archive and verifies decryption authentication and member hashes. The passphrase is not put in a URL, command argument, log or configuration file.
+3. When creation succeeds, choose **Download encrypted backup**. Only that generated encrypted archive is downloadable through an authenticated same-origin request; no arbitrary file path, plaintext archive or restore action is exposed.
+4. Verify an independent protected copy and perform an isolated restore test separately. The downloaded archive contains private authentication, ntfy configuration and endpoint history; keep it out of Git.
+
+Archives are created under `/var/lib/sentinel-hub/backups`. They include hub config/auth, all hub network cases/imported origins, its own outbox, configured ntfy credentials, package code and hub/watchdog units. Legacy AdGuard/router/alert code/config/state and OS/SSH identity are excluded, and the result lists missing components. `integrity_verified` can be true while restore verification, off-host-copy verification and full-system completeness remain false. Local archives share the host's failure risks. See [recovery and retention](RECOVERY.md#encrypted-hub-backup-and-download).
 
 For a CLI-only install, use a new virtual environment in your chosen development directory:
 

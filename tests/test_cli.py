@@ -37,7 +37,8 @@ class CliTests(unittest.TestCase):
             self.assertEqual(cli.main(["doctor"]), 0)
         report = json.loads(out.getvalue())
         self.assertFalse(report["network_contacted"])
-        self.assertFalse(report["continuous_connection_intake"])
+        self.assertEqual(report["continuous_connection_intake"], "optional_linux_hub")
+        self.assertFalse(report["complete_network_visibility"])
 
     def test_version(self):
         out = io.StringIO()

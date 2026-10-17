@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.0a1
+
+- Autonomous Ubuntu hub with startup service, private logging, scoped network profiles, and background review/alert intake.
+- Authenticated loopback dashboard for reports, exact endpoint decisions, separate application recognition and generic alert tests.
+- Passive current-namespace Linux TCP observations with bounded process attribution and explicit incomplete evidence.
+- Encrypted allowlisted backup and integrity inspection; no automatic restoration or blocking.
+- Existing alert/router services and household DNS remain independently configured.
+
+
 ## 0.1.0a1
 
 - Package the persistent ntfy outbox, bounded retries and readback verification.

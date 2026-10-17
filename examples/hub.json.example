@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "state_dir": "/var/lib/sentinel-hub",
+  "network_id": "00000000-0000-0000-0000-000000000000",
+  "network_label": "REPLACE_WITH_VERIFIED_NETWORK_LABEL",
+  "actor_key": "REPLACE_WITH_VERIFIED_LINUX_HOST_BINDING",
+  "expected_host_fingerprint": "REPLACE_WITH_VERIFIED_HOST_FINGERPRINT",
+  "expected_gateway_fingerprint": "REPLACE_WITH_VERIFIED_GATEWAY_FINGERPRINT",
+  "collection_interval_seconds": 60,
+  "linux_enabled": true,
+  "router_state_dir": "/var/lib/sentinel-router",
+  "router_expected_gateway": "192.0.2.1",
+  "alerts_config_path": "/etc/sentinel-alerts/config.json",
+  "port": 8765,
+  "auth_path": "/etc/sentinel-hub/dashboard-auth.json"
+}

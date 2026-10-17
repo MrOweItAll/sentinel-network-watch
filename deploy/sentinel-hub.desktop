@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Sentinel Network Watch
+Comment=Review local network observations and pending decisions
+Exec=xdg-open http://127.0.0.1:8765/
+TryExec=xdg-open
+Icon=network-workgroup
+Terminal=false
+Categories=System;Monitor;Network;
+StartupNotify=false

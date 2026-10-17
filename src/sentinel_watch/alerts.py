@@ -52,6 +52,7 @@ MAX_VERIFIED = 2000
 VERIFIED_RETENTION = 30 * 86400
 HTTP_TIMEOUT = 12
 SERVER_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,64}\Z")
+HUB_NOTICE_CATEGORIES = frozenset({"review_needed", "monitoring_gap", "monitoring_recovered"})
 ROUTER_NOTICE_CATEGORIES = frozenset({
     "inventory_change", "router_collection_degraded", "router_collection_recovered",
 })
@@ -555,6 +556,9 @@ class AlertEngine:
             "inventory_change": "Sentinel observed a network inventory change. Review the local report.",
             "router_collection_degraded": "Sentinel router monitoring needs attention. Review the local report.",
             "router_collection_recovered": "Sentinel router monitoring recovered.",
+            "review_needed": "Sentinel has new items for review. Open the local dashboard.",
+            "monitoring_gap": "Sentinel monitoring needs attention. Open the local dashboard.",
+            "monitoring_recovered": "Sentinel collection resumed. Coverage limits still apply.",
         }
         body = templates[kind] + " Event " + event_id
         connection.execute(
@@ -590,6 +594,21 @@ class AlertEngine:
             now = self.clock()
             self._prune(connection, now)
             return self._enqueue(connection, category, now, event_id)
+
+    def enqueue_hub_notice(self, notice_id: str, category: str) -> str:
+        """Persist generic hub intents; UUID scope is separate from router intents."""
+        if (not isinstance(notice_id, str) or re.fullmatch(r"[0-9a-f]{32}", notice_id) is None
+                or category not in HUB_NOTICE_CATEGORIES):
+            raise SafeError("E_ARGUMENT")
+        event_id = str(uuid.uuid5(uuid.NAMESPACE_URL, "sentinel-hub-notice/v1/" + notice_id))
+        with self._locked_connection() as connection, _transaction(connection):
+            existing = connection.execute("SELECT kind FROM events WHERE event_id=?", (event_id,)).fetchone()
+            if existing is not None:
+                if existing["kind"] != category:
+                    raise SafeError("E_ARGUMENT")
+                return event_id
+            self._prune(connection, self.clock())
+            return self._enqueue(connection, category, self.clock(), event_id)
 
     def _prune(self, connection, now: float):
         connection.execute("DELETE FROM events WHERE state='verified' AND verified_at<?",

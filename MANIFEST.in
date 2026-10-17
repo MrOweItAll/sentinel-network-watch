@@ -1,4 +1,4 @@
 include LICENSE README.md install.py
-recursive-include deploy *.service *.timer
+recursive-include deploy *.service *.timer *.desktop
 recursive-include examples *.json *.json.example
 recursive-include docs *.md
