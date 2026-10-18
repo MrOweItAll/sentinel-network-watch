@@ -43,7 +43,9 @@ class RouterNoticeTests(unittest.TestCase):
                 self.assertNotIn(notice_id, row["body"])
                 self.assertNotIn(self.fixture.config.topic, row["body"])
                 self.assertNotIn(self.fixture.config.token, row["body"])
-                self.assertIn(" Event " + event_id, row["body"])
+                self.assertNotIn(event_id, row["body"])
+                self.assertEqual(row["sequence_id"], event_id)
+                self.assertTrue(row["title"].startswith("Sentinel "))
                 self.assertEqual(row["priority"], 4 if category == "router_collection_degraded" else 3)
         self.assertEqual(self.http.calls, [])
 

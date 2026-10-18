@@ -134,6 +134,18 @@ Status performs no network request. A tick observes health and attempts at most 
 
 Personally confirm the generic test notification in your subscribed client. A verified cache ID is not an acknowledgement from your phone. Android background settings and iOS push delivery, especially with self-hosting, require separate client/server configuration described in the [ntfy subscription documentation](https://docs.ntfy.sh/subscribe/phone/).
 
+New alert titles describe their purpose and include a severity:
+
+| Level | Meaning | ntfy priority |
+| --- | --- | --- |
+| INFO | Startup, requested delivery tests, or checks passing again | 3 |
+| REVIEW | Inventory or connection observations need a decision | 3 |
+| WARNING | Service checks failed or collection has a gap | 4 |
+
+Each new message contains a short `Reason:` and `Action:`. Health warnings include fixed descriptions of failed checks, when available. Review requests do not establish malicious activity; recovery means checks passed again and does not establish complete network visibility. Notification priority does not override a phone's notification permissions or Focus settings.
+
+Event identifiers stay in the private outbox and ntfy sequence metadata. New messages require the server to return the exact sequence identity in its acceptance response and cached readback, as described in the [ntfy publishing documentation](https://docs.ntfy.sh/publish/#updating-notifications). Test your configured server before enabling a new installation. A missing or different identity remains unverified and follows normal recovery/backoff. Previously queued events keep their original body, identity, priority and generic title through the additive schema update; retained notifications can therefore show earlier wording.
+
 After testing and agreeing on recovery:
 
 ```sh

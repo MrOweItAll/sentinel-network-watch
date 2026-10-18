@@ -56,6 +56,52 @@ HUB_NOTICE_CATEGORIES = frozenset({"review_needed", "monitoring_gap", "monitorin
 ROUTER_NOTICE_CATEGORIES = frozenset({
     "inventory_change", "router_collection_degraded", "router_collection_recovered",
 })
+# Fixed phone presentation only. No filenames, host/application details or raw
+# check names may be interpolated into these messages. Body/title are committed
+# with each new intent, so later presentation changes cannot alter its readback.
+EVENT_PRESENTATIONS = {
+    "boot": ("INFO", "Monitoring started",
+             "Sentinel initialized monitoring for this system boot.",
+             "No immediate action. Check the local health report for coverage gaps."),
+    "down": ("WARNING", "Service health",
+             "Local health checks failed repeatedly.",
+             "Check the local health report and inspect failed checks before changing settings."),
+    "recovery": ("INFO", "Service checks recovered",
+                 "Local service checks passed again.",
+                 "Continue monitoring. Earlier coverage limits still apply."),
+    "test": ("INFO", "Notification test",
+             "This is a requested alert delivery test.",
+             "Confirm you received it in your notification client."),
+    "inventory_change": ("REVIEW", "Inventory needs review",
+                         "Network inventory observations are ready for review.",
+                         "Review the local inventory before recognizing devices."),
+    "router_collection_degraded": ("WARNING", "Router monitoring gap",
+                                   "The router collector reported missing or incomplete observations.",
+                                   "Open the local Sentinel report and check the collector."),
+    "router_collection_recovered": ("INFO", "Router monitoring resumed",
+                                    "Router collection checks passed again.",
+                                    "Review collection gaps. Complete traffic visibility is not available."),
+    "review_needed": ("REVIEW", "Connections need review",
+                      "Observed relationships need review or more evidence; this does not establish malicious activity.",
+                      "Open Sentinel locally and review each item. Recognizing an app does not approve destinations."),
+    "monitoring_gap": ("WARNING", "Collection needs attention",
+                       "Collection is missing, incomplete, or unable to save an observation.",
+                       "Open Sentinel locally and inspect collection status and coverage gaps."),
+    "monitoring_recovered": ("INFO", "Collection resumed",
+                             "Sentinel collection checks passed again.",
+                             "Review the local dashboard. Coverage remains partial."),
+}
+FAILED_CHECK_REASONS = {
+    "docker_service": "the Docker service check failed",
+    "adguard_container": "the AdGuard container check failed",
+    "dns_udp": "the local UDP DNS test failed",
+    "dns_tcp": "the local TCP DNS test failed",
+    "adguard_web": "the local AdGuard interface check failed",
+    "adguard_ui": "the local AdGuard interface check failed",
+    "outbox_filesystem": "alert outbox storage needs attention",
+    "router_collector_fresh": "the router observation freshness check failed",
+    "hub_collection": "the Sentinel collection check failed",
+}
 SAFE_CODES = frozenset({
     "E_ARGUMENT", "E_AUTH", "E_BUSY", "E_CONFIG", "E_HTTP_CLIENT",
     "E_HTTP_SERVER", "E_INTERNAL", "E_NETWORK", "E_PRIVILEGE",
@@ -75,6 +121,20 @@ class SafeError(Exception):
 
 class TransportError(SafeError):
     pass
+
+
+def _presentation(kind: str, checks=None) -> tuple[str, str]:
+    if kind not in EVENT_PRESENTATIONS:
+        raise SafeError("E_ARGUMENT")
+    severity, title, reason, action = EVENT_PRESENTATIONS[kind]
+    if kind == "down" and checks:
+        reasons = list(dict.fromkeys(text for key, text in FAILED_CHECK_REASONS.items()
+                                    if checks.get(key) is False))
+        if reasons:
+            reason += " Observed check failures: " + "; ".join(reasons[:3]) + "."
+            if len(reasons) > 3:
+                reason += " Additional checks also failed."
+    return "Sentinel " + severity + ": " + title, "Reason: " + reason + "\nAction: " + action
 
 
 @dataclass(frozen=True)
@@ -522,6 +582,12 @@ class AlertEngine:
                     server_id TEXT, accepted_at REAL, verified_at REAL, last_error TEXT);
                 CREATE INDEX IF NOT EXISTS events_due ON events(state,next_attempt,created);
             """)
+            # Additive migration only: legacy rows retain exact IDs/bodies and
+            # their original generic title, including accepted/posting intents.
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(events)")}
+            for column in ("title", "sequence_id"):
+                if column not in columns:
+                    connection.execute("ALTER TABLE events ADD COLUMN " + column + " TEXT")
 
     @contextlib.contextmanager
     def _locked_connection(self):
@@ -536,7 +602,9 @@ class AlertEngine:
             finally:
                 connection.close()
 
-    def _enqueue(self, connection, kind: str, now: float, event_id: str | None = None) -> str:
+    def _enqueue(self, connection, kind: str, now: float, event_id: str | None = None, *, checks=None) -> str:
+        if kind not in EVENT_PRESENTATIONS:
+            raise SafeError("E_ARGUMENT")
         count = connection.execute("SELECT COUNT(*) FROM events").fetchone()[0]
         if count >= self.max_events:
             # History may yield space under pressure; an unverified intent may not.
@@ -548,23 +616,12 @@ class AlertEngine:
             if connection.execute("SELECT COUNT(*) FROM events").fetchone()[0] >= self.max_events:
                 raise SafeError("E_QUEUE_FULL")
         event_id = str(uuid.uuid4()) if event_id is None else event_id
-        templates = {
-            "boot": "Sentinel monitoring started.",
-            "down": "Sentinel service checks need attention.",
-            "recovery": "Sentinel service checks recovered.",
-            "test": "Sentinel alert delivery test.",
-            "inventory_change": "Sentinel observed a network inventory change. Review the local report.",
-            "router_collection_degraded": "Sentinel router monitoring needs attention. Review the local report.",
-            "router_collection_recovered": "Sentinel router monitoring recovered.",
-            "review_needed": "Sentinel has new items for review. Open the local dashboard.",
-            "monitoring_gap": "Sentinel monitoring needs attention. Open the local dashboard.",
-            "monitoring_recovered": "Sentinel collection resumed. Coverage limits still apply.",
-        }
-        body = templates[kind] + " Event " + event_id
+        title, body = _presentation(kind, checks)
         connection.execute(
-            "INSERT INTO events(event_id,kind,body,priority,created,state,next_attempt) "
-            "VALUES(?,?,?,?,?,'pending',?)",
-            (event_id, kind, body, 4 if kind in ("down", "router_collection_degraded") else 3, now, now),
+            "INSERT INTO events(event_id,kind,body,priority,created,state,next_attempt,title,sequence_id) "
+            "VALUES(?,?,?,?,?,'pending',?,?,?)",
+            (event_id, kind, body, 4 if EVENT_PRESENTATIONS[kind][0] == "WARNING" else 3,
+             now, now, title, event_id),
         )
         return event_id
 
@@ -633,7 +690,7 @@ class AlertEngine:
             successes = min(old["successes"] + 1, 1000000) if healthy else 0
             stable = old["stable"]
             if not healthy and failures >= 2 and stable != "down":
-                self._enqueue(connection, "down", now)
+                self._enqueue(connection, "down", now, checks=checks)
                 stable = "down"
             elif healthy and stable == "down" and successes >= 2:
                 self._enqueue(connection, "recovery", now)
@@ -663,8 +720,10 @@ class AlertEngine:
         if self.config.token:
             headers["Authorization"] = "Bearer " + self.config.token
         if event is not None:
-            headers.update({"Content-Type": "text/plain; charset=utf-8", "Title": "Sentinel",
+            headers.update({"Content-Type": "text/plain; charset=utf-8", "Title": event["title"] or "Sentinel",
                             "Priority": str(event["priority"]), "Cache": "yes"})
+            if event["sequence_id"] is not None:
+                headers["X-Sequence-ID"] = event["sequence_id"]
         return headers
 
     def _request(self, method: str, url: str, headers, body=None) -> HttpResponse:
@@ -705,7 +764,8 @@ class AlertEngine:
         return (isinstance(obj, dict) and obj.get("event") == "message"
                 and isinstance(obj.get("id"), str) and SERVER_ID_RE.fullmatch(obj["id"]) is not None
                 and (server_id is None or obj["id"] == server_id)
-                and obj.get("topic") == self.config.topic and obj.get("message") == event["body"])
+                and obj.get("topic") == self.config.topic and obj.get("message") == event["body"]
+                and (event["sequence_id"] is None or obj.get("sequence_id") == event["sequence_id"]))
 
     def _read_messages(self, body: bytes) -> list[dict]:
         try:

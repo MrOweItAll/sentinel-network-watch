@@ -46,9 +46,11 @@ class FakeTransport:
         body = value if isinstance(value, bytes) else json.dumps(value).encode()
         return sut.HttpResponse(status=status, body=body, headers=headers or {})
 
-    def accept(self, body):
+    def accept(self, body, sequence_id=None):
         record = {'id': 'fixture-' + str(len(self.messages) + 1), 'event': 'message',
                   'topic': self.topic, 'message': body.decode('utf-8'), 'time': 2_000_000_000}
+        if sequence_id is not None:
+            record['sequence_id'] = sequence_id
         self.messages.append(record)
         return self.response(200, record)
 
@@ -65,7 +67,7 @@ class FakeTransport:
             if action is not None:
                 return action
         if method == 'POST':
-            return self.accept(body)
+            return self.accept(body, headers.get('X-Sequence-ID'))
         if method != 'GET':
             raise AssertionError('Unexpected method in fixture')
         query = parse_qs(urlsplit(url).query)
@@ -143,7 +145,8 @@ class AlertEngineTests(unittest.TestCase):
         self.engine = self.new_engine()
         self.engine.tick()
         self.assertEqual(self.http.methods(), ['POST', 'GET'])
-        self.assertIn(event.encode(), self.http.posts()[0]['body'])
+        self.assertEqual(self.http.posts()[0]['headers']['X-Sequence-ID'], event)
+        self.assertNotIn(event.encode(), self.http.posts()[0]['body'])
         self.engine = self.new_engine()
         self.later()
         self.assertEqual(len(self.http.posts()), 1)
@@ -159,7 +162,8 @@ class AlertEngineTests(unittest.TestCase):
         self.assertEqual(first['health_state'], 'unknown')
         self.assertEqual(first['consecutive_successes'], 0)
         self.assertIsNone(first['checked_at'])
-        self.assertIn(existing.encode(), self.http.posts()[0]['body'])
+        self.assertEqual(self.http.posts()[0]['headers']['X-Sequence-ID'], existing)
+        self.assertNotIn(existing.encode(), self.http.posts()[0]['body'])
         # Restart proves the failed observation did not commit its boot marker.
         self.clock.advance(1)
         engine = self.new_engine(state=state, max_events=1)
@@ -216,7 +220,7 @@ class AlertEngineTests(unittest.TestCase):
     def test_timeout_after_acceptance_reads_back_before_any_republish(self):
         event = self.engine.enqueue_test()
         def accepted_then_timeout(method, url, headers, body):
-            self.http.accept(body)
+            self.http.accept(body, headers.get('X-Sequence-ID'))
             raise sut.TransportError('E_NETWORK')
         self.http.actions.append(('POST', accepted_then_timeout))
         self.engine.tick()
@@ -225,7 +229,9 @@ class AlertEngineTests(unittest.TestCase):
         self.later()
         self.assertEqual(self.http.methods(), ['POST', 'GET'])
         query = parse_qs(urlsplit(self.http.calls[-1]['url']).query)
-        self.assertIn(event, query['message'][0])
+        self.assertEqual(query['message'][0], self.http.posts()[0]['body'].decode())
+        self.assertNotIn(event, query['message'][0])
+        self.assertEqual(self.http.posts()[0]['headers']['X-Sequence-ID'], event)
         self.later()
         self.assertEqual(len(self.http.posts()), 1)
 
