@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh Sentinel observed activity every 30 seconds
+
+[Timer]
+OnBootSec=25
+OnUnitActiveSec=30
+AccuracySec=1
+Persistent=false
+
+[Install]
+WantedBy=timers.target

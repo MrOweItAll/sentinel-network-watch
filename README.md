@@ -8,6 +8,8 @@ This is partial telemetry. Linux collection observes TCP peers/listeners in the 
 
 ## Autonomous Linux hub
 
+A separate [home-LAN HTTPS console](docs/CONSOLE.md) is available as an alpha deployment path with an unprivileged web service and a separate root observation worker. It includes mobile-friendly reports, scoped interface counters and annotation-only review. Its units require deliberate TLS, login and network setup; they are not enabled by the existing installer. [Current limits and future router contracts](docs/CONSOLE-CAPABILITIES.md) describe what a replacement gateway must provide.
+
 Install from a reviewed release on a Linux/systemd host. The installer is copy-only and leaves every service/timer disabled. On a host with existing Sentinel alert/router units, use `sudo python3 install.py --hub-only` to preserve those units; see [installation](docs/INSTALL.md#autonomous-hub-and-local-dashboard).
 
 ```sh

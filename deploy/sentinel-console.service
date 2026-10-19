@@ -1,0 +1,38 @@
+[Unit]
+Description=Sentinel private home-network HTTPS console
+After=network-online.target sentinel-console-feed.service
+Wants=network-online.target sentinel-console-feed.timer
+
+[Service]
+Type=simple
+User=sentinelconsole
+Group=sentinelconsole
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONPATH=/opt/sentinel-console
+ExecStart=/usr/bin/python3 -m sentinel_watch.console
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictAddressFamilies=AF_INET AF_UNIX
+ReadWritePaths=/var/lib/sentinel-console
+ReadOnlyPaths=/var/lib/sentinel-console-feed
+InaccessiblePaths=/root /var/lib/sentinel-router /var/lib/sentinel-alerts -/etc/sentinel-alerts -/etc/sentinel-router -/etc/sentinel
+MemoryMax=192M
+TasksMax=32
+LimitNOFILE=128
+
+[Install]
+WantedBy=multi-user.target
