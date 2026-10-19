@@ -1,5 +1,6 @@
 """Offline synthetic console fixtures. No sockets, real accounts or host capture."""
 import io
+import copy
 from email.message import Message
 import json
 from pathlib import Path
@@ -326,6 +327,202 @@ class ServerBoundaryTests(unittest.TestCase):
                 handler._handle()
                 self.assertEqual(handler._write.call_args.args[0][0], 400)
                 handler.server.app.dispatch.assert_not_called()
+
+
+class History:
+    """Synthetic provider seam; archive storage rules have separate tests."""
+    def __init__(self, snapshot):
+        self.context = snapshot['network_id']
+        self.rows = []
+        for index in range(620):
+            self.rows.append({'id': 'archive-' + str(index), 'source': 'router', 'state': 'history',
+                'transport': 'unknown', 'direction': 'vendor_outgoing' if index % 2 else 'vendor_incoming',
+                'network_id': self.context, 'source_address': '192.0.2.50', 'source_port': None,
+                'destination_address': '198.51.100.30', 'destination_port': 443,
+                'observed_at': 999.0, 'summary': 'Retained synthetic router observation.',
+                'reason': 'Historical observation, not a live connection.',
+                'next_step': 'Review the source evidence.', 'flags': []})
+        self.calls, self.available, self.fresh, self.override = [], True, True, None
+
+    def summary(self, snapshot, annotations):
+        self.calls.append(('summary', snapshot, annotations))
+        return {'available': self.available, 'state': 'ok' if self.available else 'unavailable',
+                'generated_at': 1000.0, 'collector_checked_at': 999.0,
+                'raw_retained_count': 625, 'total_observations': 620, 'row_errors': 0,
+                'reason': 'Retained observations; not live sessions.'}
+
+    def page(self, query, annotations, snapshot):
+        self.calls.append(('page', copy.deepcopy(query), snapshot))
+        if self.override is not None:
+            return self.override
+        rows = [row for row in self.rows if query['direction'] == 'all' or row['direction'] == query['direction']]
+        if query['review'] == 'pending':
+            rows = [row for row in rows if row['id'] not in annotations]
+        elif query['review'] != 'all':
+            rows = [row for row in rows if annotations.get(row['id'], {}).get('decision') == query['review']]
+        rows = [row for row in rows if query['search'].casefold() in json.dumps(row).casefold()]
+        start, limit = query['offset'], query['limit']
+        page = rows[start:start + limit]
+        return {**self.summary(snapshot, annotations), 'rows': copy.deepcopy(page), 'total_matches': len(rows),
+                'offset': start, 'limit': limit, 'has_more': start + len(page) < len(rows)}
+
+    def contains(self, ident, snapshot):
+        self.calls.append(('contains', ident, snapshot))
+        return self.available and self.fresh and snapshot.get('network_id') == self.context and any(row['id'] == ident for row in self.rows)
+
+
+class HistoryTests(unittest.TestCase):
+    request, login, review = RequestTests.request, RequestTests.login, RequestTests.review
+
+    def setUp(self):
+        RequestTests.setUp(self)
+        network = '11111111-1111-4111-8111-111111111111'
+        binding = 'a' * 64
+        self.provider.return_value.update(network_id=network, network_binding_sha256=binding,
+            sources={'guard': {'matches': True, 'state': 'ok', 'network_id': network,
+                               'binding_sha256': binding}})
+        self.history = History(self.provider.return_value)
+        self.app.history = self.history
+
+    def query(self, **changes):
+        data = {'offset': 0, 'limit': 25, 'search': '', 'direction': 'all', 'review': 'pending'}
+        data.update(changes)
+        return self.request('/api/history', method='POST', data=data)
+
+    def test_archive_never_read_before_auth_origin_and_csrf(self):
+        self.assertEqual(self.query()[0], 401)
+        self.assertEqual(self.request('/api/history')[0], 401)
+        self.assertEqual(self.history.calls, [])
+        self.login()
+        data = {'offset': 0, 'limit': 25, 'search': '', 'direction': 'all', 'review': 'pending'}
+        for headers in ({'X-CSRF-Token': ''}, {'Origin': 'https://attacker.invalid'}, {'Origin': ''}):
+            self.assertEqual(self.request('/api/history', method='POST', data=data, headers=headers)[0], 403)
+        self.assertEqual(self.request('/api/history')[0], 404)
+        self.assertEqual(self.history.calls, [])
+        self.assertEqual(self.store.calls, [])
+
+    def test_snapshot_adds_summary_and_backward_snapshot_shape_is_unchanged(self):
+        self.login()
+        response = self.request()
+        self.assertEqual(response[0], 200)
+        data = json.loads(response[1])
+        self.assertEqual(set(data), {'snapshot', 'annotations', 'history'})
+        self.assertEqual(data['history']['total_observations'], 620)
+        self.assertNotIn('rows', data['history'])
+        self.app.history = None
+        self.assertEqual(set(json.loads(self.request()[1])), {'snapshot', 'annotations'})
+        self.assertEqual(self.query()[0], 503)
+
+    def test_page_beyond_first_500_and_only_page_annotations(self):
+        self.login()
+        self.store.values = {'archive-550': {'decision': 'recognize', 'note': 'Preserve this note.'},
+                             'archive-2': {'decision': 'investigate', 'note': 'Off-page private note.'}}
+        response = self.query(offset=550, limit=20, review='all')
+        self.assertEqual(response[0], 200)
+        data = json.loads(response[1])
+        self.assertEqual([row['id'] for row in data['history']['rows']], ['archive-' + str(i) for i in range(550, 570)])
+        self.assertEqual(data['history']['total_matches'], 620)
+        self.assertTrue(data['history']['has_more'])
+        self.assertEqual(data['annotations'], {'archive-550': self.store.values['archive-550']})
+        self.assertNotIn(b'Off-page private note.', response[1])
+        self.assertEqual(self.store.calls, [])
+
+    def test_pending_distinct_from_explicit_unrecognized_and_no_bulk_decisions(self):
+        self.login()
+        self.store.values['archive-0'] = {'decision': 'unrecognized', 'note': 'Explicitly reviewed.'}
+        pending = json.loads(self.query()[1])['history']
+        self.assertEqual(pending['total_matches'], 619)
+        self.assertNotIn('archive-0', [row['id'] for row in pending['rows']])
+        explicit = json.loads(self.query(review='unrecognized')[1])['history']
+        self.assertEqual([row['id'] for row in explicit['rows']], ['archive-0'])
+        self.assertEqual(self.review(id=['archive-0', 'archive-1'], decision='recognize')[0], 400)
+        self.assertEqual(self.store.calls, [])
+
+    def test_archived_id_review_preserves_other_decisions_and_notes(self):
+        self.login()
+        self.store.values['archive-0'] = {'decision': 'investigate', 'note': 'Keep unchanged.'}
+        self.assertEqual(self.review(id='archive-600', decision='recognize', note='Known retained observation.')[0], 200)
+        self.assertEqual(self.store.calls, [('archive-600', 'recognize', 'Known retained observation.')])
+        self.assertEqual(self.store.values['archive-0']['note'], 'Keep unchanged.')
+        self.assertEqual(self.store.values['archive-600']['decision'], 'recognize')
+        contains = [call for call in self.history.calls if call[0] == 'contains']
+        self.assertIs(contains[0][2], self.provider.return_value)
+        self.assertEqual(self.review(id='archive-does-not-exist')[0], 409)
+        self.assertEqual(len(self.store.calls), 1)
+
+    def test_stale_archive_or_network_context_cannot_authorize_review(self):
+        self.login()
+        self.history.fresh = False
+        self.assertEqual(self.review(id='archive-600')[0], 409)
+        self.history.fresh = True
+        for guard in ({'matches': False}, {'state': 'stale'}, {'network_id': 'other'}, {'binding_sha256': 'b' * 64}):
+            original = self.provider.return_value['sources']['guard'].copy()
+            self.provider.return_value['sources']['guard'].update(guard)
+            calls = len(self.history.calls)
+            self.assertEqual(self.review(id='archive-600')[0], 409)
+            self.assertEqual(len(self.history.calls), calls)
+            self.provider.return_value['sources']['guard'] = original
+        self.assertEqual(self.store.calls, [])
+
+    def test_unavailable_archive_preserves_snapshot_and_returns_fixed_page_error(self):
+        self.login()
+        self.history.available = False
+        snapshot = self.request()
+        self.assertEqual(snapshot[0], 200)
+        self.assertFalse(json.loads(snapshot[1])['history']['available'])
+        response = self.query()
+        self.assertEqual(response[0], 503)
+        self.assertEqual(json.loads(response[1]), {'error': 'E_HISTORY_UNAVAILABLE'})
+        self.history.page = Mock(side_effect=RuntimeError('FAKE_PRIVATE_STORAGE_PATH'))
+        response = self.query()
+        self.assertEqual(response[0], 503)
+        self.assertNotIn(b'FAKE_PRIVATE_STORAGE_PATH', response[1])
+        self.history.summary = Mock(side_effect=RuntimeError('FAKE_PRIVATE_STORAGE_PATH'))
+        self.assertEqual(json.loads(self.request()[1])['history'], c._history_unavailable())
+
+    def test_malformed_query_rejected_before_provider_and_store(self):
+        self.login()
+        changes = ({'offset': -1}, {'offset': True}, {'offset': 2 ** 63}, {'limit': 0}, {'limit': 101},
+                   {'limit': True}, {'search': 'x' * 201}, {'search': []}, {'direction': 'incoming'},
+                   {'search': 'bad\nquery'}, {'search': 'bad\x7fquery'},
+                   {'direction': []}, {'review': 'approve'}, {'review': []}, {'extra': True})
+        for change in changes:
+            with self.subTest(change=change):
+                response = self.query(**change)
+                self.assertEqual(response[0], 400)
+                self.assertEqual(json.loads(response[1]), {'error': 'E_HISTORY_QUERY'})
+        self.assertEqual(self.history.calls, [])
+        self.assertEqual(self.store.calls, [])
+
+    def test_archive_output_malformed_bounds_ids_network_and_credentials_fail_closed(self):
+        self.login()
+        query = {'offset': 0, 'limit': 25, 'search': '', 'direction': 'all', 'review': 'pending'}
+        good = self.history.page(query, {}, self.provider.return_value)
+        bad = []
+        for key, value in (('has_more', False), ('offset', 1), ('limit', 26), ('total_matches', -1),
+                           ('generated_at', float('nan')), ('rows', [{}]), ('extra', True)):
+            item = copy.deepcopy(good); item[key] = value; bad.append(item)
+        duplicate = copy.deepcopy(good); duplicate['rows'][1]['id'] = duplicate['rows'][0]['id']; bad.append(duplicate)
+        for key, value in (('id', '../outside'), ('network_id', 'other'), ('source', 'linux'),
+                           ('transport', 'TCP'), ('destination_port', True), ('observed_at', float('nan')),
+                           ('reason', []), ('flags', {}), ('token', 'FAKE_PRIVATE_VALUE')):
+            item = copy.deepcopy(good); item['rows'][0][key] = value; bad.append(item)
+        for item in bad:
+            self.history.override = item
+            with self.subTest(keys=list(item)):
+                response = self.query()
+                self.assertEqual(response[0], 503)
+                self.assertEqual(json.loads(response[1]), {'error': 'E_HISTORY_DATA'})
+                self.assertNotIn(b'FAKE_PRIVATE_VALUE', response[1])
+        self.assertEqual(self.store.calls, [])
+
+    def test_factory_passes_optional_history_without_changing_tls_boundary(self):
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
+        with patch.object(c.os, 'geteuid', return_value=1000, create=True), \
+             patch.object(c, 'PasswordAuth'), patch.object(c, '_TLSServer') as server:
+            c.create_server(config(), self.provider, self.store, context, history_provider=self.history)
+        self.assertIs(server.call_args.args[2].history, self.history)
 
 
 if __name__ == '__main__':

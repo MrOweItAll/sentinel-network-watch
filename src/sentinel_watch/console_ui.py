@@ -5,6 +5,7 @@ HTML = r'''<!doctype html>
 <title>Sentinel · Network activity</title>
 <style nonce="__NONCE__">
 :root{color-scheme:dark;--bg:#101820;--panel:#192631;--line:#334855;--text:#edf4f6;--muted:#acbec8;--accent:#76dbbd;--warn:#ffd28a;--bad:#ff9898}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,sans-serif}header,main{max-width:1280px;margin:auto;padding:20px}header{display:flex;justify-content:space-between;align-items:center;gap:16px}h1{font-size:1.6rem;margin:0}h2{font-size:1.12rem;margin:0 0 10px}p{margin:7px 0}.muted,small{color:var(--muted)}.badge{font-size:.8rem;border:1px solid var(--line);border-radius:20px;padding:3px 10px;display:inline-block}.banner{border-left:4px solid var(--warn);padding:13px 16px;background:#302b22;margin-bottom:18px}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin:16px 0}.card,details{border:1px solid var(--line);border-radius:12px;background:var(--panel);padding:16px}.value{font-size:1.65rem;font-weight:650}.controls{display:flex;flex-wrap:wrap;gap:10px;margin:18px 0;align-items:end}label{display:grid;gap:5px;color:var(--muted)}input,select,button,textarea{font:inherit;background:#13212b;color:var(--text);border:1px solid #4b626f;border-radius:7px;padding:9px 12px}input[type=search]{min-width:250px}button{cursor:pointer}button:hover{border-color:var(--accent)}button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--accent);outline-offset:3px}button:disabled{cursor:not-allowed;opacity:.6}.primary{background:#285c50;border-color:var(--accent)}.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:10px}table{width:100%;border-collapse:collapse;min-width:820px}th,td{text-align:left;padding:12px;vertical-align:top;border-bottom:1px solid var(--line)}th{background:var(--panel);font-size:.85rem;color:var(--muted)}td{font-size:.9rem}td small{display:block}td button{padding:5px 10px}.INFO{color:var(--accent)}.REVIEW{color:var(--warn)}.WARNING{color:var(--bad)}code{font-size:.85em;overflow-wrap:anywhere}.foot{margin:22px 0;color:var(--muted);font-size:.88rem}.empty{padding:25px;color:var(--muted)}dialog{background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:14px;max-width:680px;width:calc(100% - 28px);max-height:90vh}dialog::backdrop{background:#000a}dialog dl{display:grid;grid-template-columns:120px 1fr;gap:8px}dt{color:var(--muted)}dd{margin:0;overflow-wrap:anywhere}textarea{width:100%;min-height:80px}.row{display:flex;gap:10px;flex-wrap:wrap}.spacer{flex:1}summary{cursor:pointer}#error{color:var(--bad)}a{color:var(--accent)}@media(max-width:600px){header,main{padding:14px}.controls>*{flex:1}input[type=search]{min-width:100%;width:100%}h1{font-size:1.3rem}.cards{grid-template-columns:1fr 1fr}.value{font-size:1.25rem}dialog dl{grid-template-columns:1fr}dd{margin-bottom:8px}}
+[hidden]{display:none!important}
 </style></head><body>
 <header><div><h1>Sentinel <span class="muted">/ Network activity</span></h1><small>Private home-network console</small></div><button id="logout">Sign out</button></header>
 <main>
@@ -13,39 +14,137 @@ HTML = r'''<!doctype html>
 <p id="error" role="alert"></p>
 <section class="cards" aria-label="Observed activity">
 <div class="card"><small>Current iMac TCP entries</small><div id="current" class="value">—</div><small>Established sockets and listeners</small></div>
-<div class="card"><small>Router history shown</small><div id="history" class="value">—</div><small>Observations, not live streams</small></div>
-<div class="card"><small>Needs your review</small><div id="reviews" class="value">—</div><small>Unrecognized does not mean malicious</small></div>
+<div class="card"><small>Recent router observations</small><div id="history" class="value">—</div><small>Recent overview, not all saved history</small></div>
+<div class="card"><small>Not reviewed · recent overview</small><div id="reviews" class="value">—</div><small>Unreviewed is a queue state, not a threat verdict</small></div>
 <div class="card"><small>Whole-network data usage</small><div class="value">Unavailable</div><small>Requires supported gateway telemetry</small></div>
 </section>
 <details><summary>Devices reported by the router</summary><p class="muted">Saved inventory, including smart TVs, wearables and home appliances if the router reports them. This list can contain old names and addresses. Recognition never approves all traffic from a device.</p><div id="devices" class="cards"></div></details>
 <details><summary>Data rates and totals — iMac interfaces only</summary><p class="muted">Received and sent at each iMac interface. These include local network traffic and are not household totals. Do not add interfaces together: bridges can count the same traffic twice.</p><div id="counters" class="cards"></div></details>
-<div class="controls"><label>Find a connection<input id="search" type="search" placeholder="Address, application, device or service"></label><label>Source<select id="source"><option value="all">All observations</option><option value="linux">Current iMac</option><option value="router">Router history</option></select></label><label>Direction<select id="direction"><option value="all">Any direction</option><option value="vendor_outgoing">Router outgoing</option><option value="vendor_incoming">Router incoming</option><option value="unknown">Initiator unknown</option><option value="listening">Listening</option></select></label><label>Review<select id="review"><option value="all">All review states</option><option value="pending">Unrecognized / needs review</option><option value="recognize">Recognized by you</option><option value="investigate">Investigate</option></select></label></div>
+<p><button id="browse-history" class="primary">Browse all saved router history</button></p>
+<div class="controls"><label>Find a connection<input id="search" type="search" maxlength="200" placeholder="Address, application, device or service"></label><label>Source<select id="source"><option value="all">Recent overview · both sources</option><option value="linux">Current iMac · snapshot</option><option value="router">Recent router · snapshot</option><option value="history">All saved router history</option></select></label><label>Direction<select id="direction"><option value="all">Any direction</option><option value="vendor_outgoing">Router outgoing</option><option value="vendor_incoming">Router incoming</option><option value="unknown">Initiator unknown</option><option value="listening">Listening</option></select></label><label>Review<select id="review"><option value="pending">Not reviewed</option><option value="all">All review states</option><option value="unrecognized">Kept unrecognized</option><option value="investigate">Investigate</option><option value="recognize">Recognized by you</option></select></label></div>
+<p class="muted" id="history-status" role="status" aria-live="polite"></p>
 <p class="muted" id="count"></p>
 <div class="table-wrap"><table><thead><tr><th>Review</th><th>From / local endpoint</th><th>To / peer endpoint</th><th>What it may be</th><th>Evidence / time</th><th>Details</th></tr></thead><tbody id="rows"></tbody></table><div id="empty" class="empty" hidden>No observations match these filters.</div></div>
+<div id="history-pages" class="controls" hidden><button id="history-prev">Previous page</button><button id="history-next">Next page</button><small>50 observations per page · search and filters cover all saved router rows</small></div>
+<p class="muted" id="export-scope">Download includes only the filtered rows displayed in the current view.</p>
 <details ><summary>Monitoring health and available controls</summary><div id="health"></div><p><strong>Disconnect: unavailable on the current adapter.</strong> Review decisions below record your assessment. They do not stop traffic or grant a firewall permission.</p><p>For an identified threat, the immediate physical option is to disconnect that device from Wi-Fi/Ethernet or power it off. A supported future gateway can provide narrowly scoped, verified blocking with a visible rule preview and rollback.</p></details>
 <p class="foot">Names and port labels are clues, not proof of a person, service or authorization. Encrypted traffic hides its contents. No connection records are sent to an outside lookup service. A future router adapter must verify its capabilities before enabling counters or controls.</p>
 </main>
-<dialog id="detail"><h2>Connection evidence</h2><dl id="fields"></dl><p id="why"></p><p id="next"></p><label>Your note<textarea id="note" maxlength="500" placeholder="Why you recognize this, or what needs checking"></textarea></label><p class="muted">Recognition applies only to this displayed observation identity. It does not approve new destinations, prove safety or change traffic.</p><div class="row"><button data-decision="recognize" class="primary">Recognize</button><button data-decision="investigate">Investigate</button><button data-decision="unrecognized">Keep unrecognized</button><button id="close">Close</button></div><p id="detail-error" role="alert"></p></dialog>
+<dialog id="detail"><h2>Connection evidence</h2><dl id="fields"></dl><p id="why"></p><p id="next"></p><label>Your note<textarea id="note" maxlength="500" placeholder="Why you recognize this, or what needs checking"></textarea></label><p class="muted">Not reviewed means no assessment has been saved. INFO evidence does not mean approved. Recognition applies only to this displayed observation identity; it does not approve new destinations, dismiss evidence warnings, prove safety or change traffic.</p><div class="row"><button data-decision="recognize" class="primary">Recognize</button><button data-decision="investigate">Investigate</button><button data-decision="unrecognized">Keep unrecognized</button><button id="close">Close</button></div><p id="detail-error" role="alert"></p></dialog>
 <script nonce="__NONCE__">
 'use strict';
-let csrf='',latest=null,annotations={},paused=false,selected=null,busy=false;
-const $=id=>document.getElementById(id), text=(tag,value,cls)=>{const e=document.createElement(tag);e.textContent=value??'Unknown';if(cls)e.className=cls;return e};
+let csrf='',latest=null,annotations={},historyAnnotations={},historySummary=null,historyPage=null;
+let paused=false,selected=null,busy=false,historyBusy=false,saving=false,historyOffset=0;
+let viewGeneration=0,snapshotSequence=0,historySequence=0,mutationEpoch=0,historyError='';
+const PAGE_SIZE=50,MAX_REPORT_BYTES=4*1024*1024;
+const $=id=>document.getElementById(id),text=(tag,value,cls)=>{const e=document.createElement(tag);e.textContent=value??'Unknown';if(cls)e.className=cls;return e};
 const when=v=>{if(v===null||v===undefined)return 'Unknown';const d=new Date(typeof v==='number'?v*1000:v);return isNaN(d)?'Unknown':d.toLocaleString()};
 const bytes=v=>{if(v===null||v===undefined||!Number.isFinite(v))return 'Unavailable';let n=v,u=['B','KB','MB','GB','TB'],i=0;while(n>=1000&&i<4){n/=1000;i++}return n.toFixed(i?1:0)+' '+u[i]};
 const endpoint=(ip,port)=>ip?(ip.includes(':')?'['+ip+']':ip)+(port===null||port===undefined?'':':'+port):'Not provided';
-async function api(path,data){let r=await fetch(path,{method:data?'POST':'GET',headers:data?{'Content-Type':'application/json','X-CSRF-Token':csrf}:{},body:data?JSON.stringify(data):undefined,credentials:'same-origin',cache:'no-store'});if(r.status===401){location.assign('/login');throw Error('Session expired')}let j=await r.json();if(!r.ok)throw Error(j.error||'Request failed');return j}
-function annotation(row){return annotations[row.id]||{decision:'unrecognized',note:''}}
-function render(){if(!latest)return;let all=latest.connections||[];$('current').textContent=all.filter(x=>x.source==='linux').length;$('history').textContent=all.filter(x=>x.source==='router').length;$('reviews').textContent=all.filter(x=>annotation(x).decision!=='recognize').length;const age=Date.now()/1000-latest.generated_at;$('freshness').textContent=age>90?'Observation feed stale':'Observation feed current';$('freshness').className='badge '+(age>90?'WARNING':'INFO');$('updated').textContent='Collected '+when(latest.generated_at)+(paused?' · View paused':' · View refreshes every 10 seconds');
-let filtered=all.filter(x=>{let a=annotation(x);return ($('source').value==='all'||x.source===$('source').value)&&($('direction').value==='all'||x.direction===$('direction').value)&&($('review').value==='all'||($('review').value==='pending'?a.decision!=='recognize':a.decision===$('review').value))&&JSON.stringify(x).toLowerCase().includes($('search').value.toLowerCase())});
-$('count').textContent=filtered.length+' matching observations · '+all.length+' loaded'+(latest.truncation?.connections_omitted?' · Source result limited':'');$('rows').replaceChildren();$('empty').hidden=filtered.length>0;
-for(let r of filtered.slice(0,500)){let tr=document.createElement('tr'),a=annotation(r);let cell=document.createElement('td');cell.append(text('strong',a.decision==='recognize'?'Recognized':a.decision==='investigate'?'Investigate':'Needs review',a.decision==='recognize'?'INFO':r.severity||'REVIEW'));cell.append(text('small',r.state==='history'?'Historical log':r.state==='listening'?'Listening socket':'Current at capture'));tr.append(cell);for(let pair of [['source_address','source_port'],['destination_address','destination_port']]){cell=document.createElement('td');cell.append(text('code',endpoint(r[pair[0]],r[pair[1]])));if(pair[0]==='source_address'&&r.device_name)cell.append(text('small',r.device_name));tr.append(cell)}cell=document.createElement('td');cell.append(text('span',r.summary||r.application||'Unattributed'));cell.append(text('small',r.application||'Application unknown'));tr.append(cell);cell=document.createElement('td');cell.append(text('span',r.source==='router'?'Router log · transport unknown':(r.transport||'Unknown')+' · initiator unknown'));cell.append(text('small',when(r.observed_at)));tr.append(cell);cell=document.createElement('td');let b=text('button','Review');b.addEventListener('click',()=>openDetail(r));cell.append(b);tr.append(cell);$('rows').append(tr)}
-if(filtered.length>500)$('count').textContent+=' · First 500 displayed; filter to narrow results';
-$('counters').replaceChildren();for(let c of latest.counters||[]){let box=text('div','', 'card');box.append(text('strong',c.interface),text('p','↓ '+bytes(c.rx_bytes_per_second)+'/s · ↑ '+bytes(c.tx_bytes_per_second)+'/s'),text('small','Received '+bytes(c.rx_bytes)+' · Sent '+bytes(c.tx_bytes)),text('small',c.reset?'Counter baseline reset; rate unavailable until next sample':'Interface counter totals; reset on reboot/interface reset'));$('counters').append(box)}if(!(latest.counters||[]).length)$('counters').append(text('p','No interface counters available.','muted'));
-$('devices').replaceChildren();for(let d of latest.devices||[]){let box=text('div','', 'card');box.append(text('strong',d.name),text('small',[d.manufacturer,d.model].filter(Boolean).join(' ')||'Model not reported'),text('p',(d.addresses||[]).join(', ')||'No address reported'),text('small','Inventory observed '+when(d.observed_at)+' · online status unverified'));$('devices').append(box)}if(!(latest.devices||[]).length)$('devices').append(text('p','No device inventory available.','muted'));$('health').replaceChildren();for(let [name,s] of Object.entries(latest.sources||{}))$('health').append(text('p',name+': '+s.state+' — '+(s.reason||'Checked')+' · '+when(s.checked_at)));}
-function openDetail(r){selected=r;let a=annotation(r);$('fields').replaceChildren();for(let [k,v] of [['Source',r.source],['Evidence',r.state],['Direction',r.direction],['From',endpoint(r.source_address,r.source_port)],['To',endpoint(r.destination_address,r.destination_port)],['Application',r.application],['Observed',when(r.observed_at)],['Source → destination',bytes(r.tx_bytes)+' total · '+(r.tx_bytes_per_second==null?'Rate unavailable':bytes(r.tx_bytes_per_second)+'/s')],['Destination → source',bytes(r.rx_bytes)+' total · '+(r.rx_bytes_per_second==null?'Rate unavailable':bytes(r.rx_bytes_per_second)+'/s')],['Counter basis',r.byte_basis||'No verified per-connection counter source'],['Disconnect','Unsupported by this adapter']])$('fields').append(text('dt',k),text('dd',v));$('why').textContent='Why shown: '+(r.reason||'Not yet reviewed.');$('next').textContent='Suggested next step: '+(r.next_step||'Identify the device and expected application before deciding.');$('note').value=a.note||'';$('detail-error').textContent='';$('detail').showModal()}
-async function refresh(){if(busy)return;busy=true;try{let j=await api('/api/snapshot');latest=j.snapshot;annotations=j.annotations||{};$('error').textContent='';render()}catch(e){$('error').textContent='Could not update: '+e.message+' · Existing view may be stale.'}finally{busy=false}}
-for(let id of ['search','source','direction','review'])$(id).addEventListener(id==='search'?'input':'change',render);$('refresh').onclick=refresh;$('pause').onclick=()=>{paused=!paused;$('pause').textContent=paused?'Resume view':'Pause view';render();if(!paused)refresh()};$('close').onclick=()=>$('detail').close();$('logout').onclick=async()=>{try{await api('/api/logout',{});location.assign('/login')}catch(e){$('error').textContent=e.message}};
-for(let b of document.querySelectorAll('[data-decision]'))b.onclick=async()=>{if(!selected)return;b.disabled=true;try{await api('/api/review',{id:selected.id,decision:b.dataset.decision,note:$('note').value});$('detail').close();await refresh()}catch(e){$('detail-error').textContent=e.message}finally{b.disabled=false}};
-$('export').onclick=()=>{if(!latest)return;let blob=new Blob([JSON.stringify({snapshot:latest,annotations},null,2)],{type:'application/json'}),u=URL.createObjectURL(blob),a=document.createElement('a');a.href=u;a.download='sentinel-network-report.json';a.click();setTimeout(()=>URL.revokeObjectURL(u),1000)};
-(async()=>{try{csrf=(await api('/api/session')).csrf_token;await refresh();setInterval(()=>{if(!paused&&!document.hidden)refresh()},10000)}catch(e){$('error').textContent=e.message}})();
+const inHistory=()=>$('source').value==='history';
+async function api(path,data){const r=await fetch(path,{method:data?'POST':'GET',headers:data?{'Content-Type':'application/json','X-CSRF-Token':csrf}:{},body:data?JSON.stringify(data):undefined,credentials:'same-origin',cache:'no-store'});if(r.status===401){location.assign('/login');throw Error('Session expired')}const j=await r.json();if(!r.ok)throw Error(j.error||'Request failed');return j}
+function annotation(row){return historyAnnotations[row.id]||annotations[row.id]||null}
+function assessment(row){const a=annotation(row);return a&&['unrecognized','investigate','recognize'].includes(a.decision)?a.decision:'pending'}
+function reviewLabel(row){return {pending:'Not reviewed',unrecognized:'Kept unrecognized',investigate:'Investigate',recognize:'Recognized by you'}[assessment(row)]}
+function matchesReview(row){return $('review').value==='all'||assessment(row)===$('review').value}
+function visibleRows(){
+ if(inHistory())return historyPage?.rows||[];
+ return (latest?.connections||[]).filter(r=>($('source').value==='all'||r.source===$('source').value)&&($('direction').value==='all'||r.direction===$('direction').value)&&matchesReview(r)&&JSON.stringify(r).toLowerCase().includes($('search').value.toLowerCase())).slice(0,500);
+}
+function render(){
+ const all=latest?.connections||[];
+ $('current').textContent=latest?all.filter(r=>r.source==='linux').length:'—';
+ $('history').textContent=latest?all.filter(r=>r.source==='router').length:'—';
+ $('reviews').textContent=latest?all.filter(r=>assessment(r)==='pending').length:'—';
+ if(latest){const age=Date.now()/1000-latest.generated_at;$('freshness').textContent=age>90?'Observation feed stale':'Observation feed current';$('freshness').className='badge '+(age>90?'WARNING':'INFO');$('updated').textContent='Collected '+when(latest.generated_at)+(paused?' · View paused':' · View refreshes every 10 seconds')}
+ const rows=visibleRows();$('rows').replaceChildren();$('empty').hidden=rows.length>0;
+ $('empty').textContent=historyBusy&&!historyPage?'Loading saved router observations…':'No observations match these filters.';
+ $('history-pages').hidden=!inHistory();
+ $('history-prev').disabled=historyBusy||!historyPage||historyPage.offset===0;
+ $('history-next').disabled=historyBusy||!historyPage||!historyPage.has_more;
+ $('export').disabled=!latest||(inHistory()&&(!historyPage||historyBusy));
+ if(inHistory()){
+  const h=historyPage||historySummary;
+  $('history-status').textContent=historyError||(!h?'Saved router history has not been loaded.':h.available===false?'Saved router history unavailable: '+(h.reason||'Check collection health.'):'Saved router observations · collector last checked '+when(h.collector_checked_at)+' · '+(h.total_observations??'Unknown')+' retained observations in '+(h.raw_retained_count??'unknown')+' retained source records'+(h.row_errors?' · '+h.row_errors+' rows could not be read':'')+'. These are historical observations, not live sessions.');
+  $('count').textContent=historyPage?(historyPage.total_matches===0?'0':(historyPage.offset+1)+'–'+(historyPage.offset+rows.length))+' of '+historyPage.total_matches+' matching saved observations · '+rows.length+' on this page'+(historyBusy?' · Refreshing…':''):'No saved-history page loaded'+(historyBusy?' · Loading…':'');
+  $('export-scope').textContent='Download includes only this displayed router-history page (up to 50 rows), its review notes and scope metadata. It is not an all-history download.';
+ }else{
+  const count=all.filter(r=>($('source').value==='all'||r.source===$('source').value)&&($('direction').value==='all'||r.direction===$('direction').value)&&matchesReview(r)&&JSON.stringify(r).toLowerCase().includes($('search').value.toLowerCase())).length;
+  $('history-status').textContent='Recent overview is bounded. Use “Browse all saved router history” to search and page through the full retained router archive.';
+  $('count').textContent=count+' matches in '+all.length+' recent loaded observations · '+rows.length+' displayed'+(count>500?' · Display limited to 500; narrow the filters':'')+(latest?.truncation?.connections_omitted?' · Source snapshot also limited':'');
+  $('export-scope').textContent='Download includes only the filtered, displayed recent overview (up to 500 rows), its review notes and scope metadata.';
+ }
+ for(const r of rows){
+  const tr=document.createElement('tr');let cell=document.createElement('td');
+  cell.append(text('strong',reviewLabel(r),assessment(r)==='recognize'?'INFO':'REVIEW'));
+  cell.append(text('small',r.state==='history'?'Historical log':r.state==='listening'?'Listening socket':'Current at capture'));tr.append(cell);
+  for(const pair of [['source_address','source_port'],['destination_address','destination_port']]){cell=document.createElement('td');cell.append(text('code',endpoint(r[pair[0]],r[pair[1]])));if(pair[0]==='source_address'&&r.device_name)cell.append(text('small',r.device_name));tr.append(cell)}
+  cell=document.createElement('td');cell.append(text('span',r.summary||r.application||'Unattributed'),text('small',r.application||'Application unknown'));tr.append(cell);
+  cell=document.createElement('td');cell.append(text('span',r.source==='router'?'Router log · transport unknown':(r.transport||'Unknown')+' · initiator unknown'));
+  cell.append(text('small',(r.source==='router'?'Collector last seen ':'Captured ')+when(r.observed_at)));
+  cell.append(text('small','Evidence: '+(r.severity||'Unrated')+(r.severity==='INFO'?' · not an approval':''),['INFO','REVIEW','WARNING'].includes(r.severity)?r.severity:'REVIEW'));
+  cell.append(text('small',r.reason||'No additional evidence assessment.'));tr.append(cell);
+  cell=document.createElement('td');const b=text('button','Review');b.addEventListener('click',()=>openDetail(r));cell.append(b);tr.append(cell);$('rows').append(tr);
+ }
+ $('counters').replaceChildren();for(const c of latest?.counters||[]){const box=text('div','', 'card');box.append(text('strong',c.interface),text('p','↓ '+bytes(c.rx_bytes_per_second)+'/s · ↑ '+bytes(c.tx_bytes_per_second)+'/s'),text('small','Received '+bytes(c.rx_bytes)+' · Sent '+bytes(c.tx_bytes)),text('small',c.reset?'Counter baseline reset; rate unavailable until next sample':'Interface counter totals; reset on reboot/interface reset'));$('counters').append(box)}if(!(latest?.counters||[]).length)$('counters').append(text('p','No interface counters available.','muted'));
+ $('devices').replaceChildren();for(const d of latest?.devices||[]){const box=text('div','', 'card');box.append(text('strong',d.name),text('small',[d.manufacturer,d.model].filter(Boolean).join(' ')||'Model not reported'),text('p',(d.addresses||[]).join(', ')||'No address reported'),text('small','Inventory observed '+when(d.observed_at)+' · online status unverified'));$('devices').append(box)}if(!(latest?.devices||[]).length)$('devices').append(text('p','No device inventory available.','muted'));
+ $('health').replaceChildren();for(const [name,s] of Object.entries(latest?.sources||{}))$('health').append(text('p',name+': '+s.state+' — '+(s.reason||'Checked')+' · '+when(s.checked_at)));
+}
+function openDetail(r){
+ if(saving)return;selected=r;const a=annotation(r);$('fields').replaceChildren();
+ for(const [k,v] of [['Your review',reviewLabel(r)],['Source',r.source],['Evidence',r.state],['Evidence level',r.severity||'Unrated'],['Direction',r.direction],['From',endpoint(r.source_address,r.source_port)],['To',endpoint(r.destination_address,r.destination_port)],['Application',r.application],[r.source==='router'?'Collector last seen':'Captured',when(r.observed_at)],['Source → destination',bytes(r.tx_bytes)+' total · '+(r.tx_bytes_per_second==null?'Rate unavailable':bytes(r.tx_bytes_per_second)+'/s')],['Destination → source',bytes(r.rx_bytes)+' total · '+(r.rx_bytes_per_second==null?'Rate unavailable':bytes(r.rx_bytes_per_second)+'/s')],['Counter basis',r.byte_basis||'No verified per-connection counter source'],['Disconnect','Unsupported by this adapter']])$('fields').append(text('dt',k),text('dd',v));
+ $('why').textContent='Evidence reason: '+(r.reason||'No additional evidence assessment.');$('next').textContent='Suggested next step: '+(r.next_step||'Identify the device and expected application before deciding.');$('note').value=a?.note||'';$('detail-error').textContent='';$('detail').showModal();
+}
+async function loadHistory(){
+ if(!inHistory())return;
+ const query={offset:historyOffset,limit:PAGE_SIZE,search:$('search').value.slice(0,200),direction:$('direction').value,review:$('review').value};
+ const generation=viewGeneration,sequence=++historySequence,epoch=mutationEpoch;
+ historyBusy=true;historyError='';render();
+ const current=()=>inHistory()&&generation===viewGeneration&&sequence===historySequence&&epoch===mutationEpoch;
+ try{const j=await api('/api/history',query);if(!current())return;if(!j.history||!Array.isArray(j.history.rows))throw Error('Invalid history response');historyPage=j.history;historyAnnotations=j.annotations||{};historySummary=j.history;}
+ catch(e){if(current()){historyError='Saved router history unavailable: '+e.message+' · Current iMac view remains available.';historyPage=null;historyAnnotations={}}}
+ finally{if(sequence===historySequence){historyBusy=false;render()}}
+}
+async function refresh(){
+ const sequence=++snapshotSequence,epoch=mutationEpoch;busy=true;
+ const page=inHistory()?loadHistory():Promise.resolve();
+ try{const j=await api('/api/snapshot');if(sequence!==snapshotSequence||epoch!==mutationEpoch)return;latest=j.snapshot;annotations=j.annotations||{};historySummary=j.history||historySummary;$('error').textContent='';render()}
+ catch(e){if(sequence===snapshotSequence)$('error').textContent='Could not update: '+e.message+' · Existing view may be stale.'}
+ finally{if(sequence===snapshotSequence)busy=false;await page}
+}
+function filtersChanged(){
+ viewGeneration++;historyOffset=0;historyPage=null;historyAnnotations={};historyError='';
+ for(const option of $('direction').options)option.disabled=inHistory()&&!['all','vendor_outgoing','vendor_incoming'].includes(option.value);
+ if(inHistory()&&!['all','vendor_outgoing','vendor_incoming'].includes($('direction').value))$('direction').value='all';
+ render();if(inHistory())return loadHistory();return Promise.resolve();
+}
+function changePage(offset){viewGeneration++;historyOffset=Math.max(0,offset);historyPage=null;historyAnnotations={};return loadHistory()}
+for(const id of ['search','source','direction','review'])$(id).addEventListener(id==='search'?'input':'change',filtersChanged);
+$('browse-history').onclick=()=>{$('source').value='history';return filtersChanged()};
+$('history-prev').onclick=()=>changePage(historyOffset-PAGE_SIZE);$('history-next').onclick=()=>changePage(historyOffset+PAGE_SIZE);
+$('refresh').onclick=refresh;
+$('pause').onclick=()=>{paused=!paused;$('pause').textContent=paused?'Resume view':'Pause view';render();if(!paused)return refresh()};
+$('close').onclick=()=>{if(!saving){$('detail').close();selected=null}};
+$('logout').onclick=async()=>{try{await api('/api/logout',{});location.assign('/login')}catch(e){$('error').textContent=e.message}};
+for(const b of document.querySelectorAll('[data-decision]'))b.onclick=async()=>{
+ if(!selected||saving)return;const record=selected,note=$('note').value,decision=b.dataset.decision;
+ saving=true;mutationEpoch++;$('note').disabled=true;for(const button of document.querySelectorAll('[data-decision]'))button.disabled=true;
+ try{const j=await api('/api/review',{id:record.id,decision,note});mutationEpoch++;const a={decision,note,...(j.annotation||{})};annotations[record.id]=a;historyAnnotations[record.id]=a;$('detail').close();selected=null;await refresh()}
+ catch(e){$('detail-error').textContent=e.message}
+ finally{saving=false;$('note').disabled=false;for(const button of document.querySelectorAll('[data-decision]'))button.disabled=false}
+};
+function exportReport(){
+ if(!latest||(inHistory()&&(!historyPage||historyBusy)))return;
+ const rows=visibleRows(),pageAnnotations={};for(const r of rows){const a=annotation(r);if(a)pageAnnotations[r.id]=a}
+ const scope={view:inHistory()?'saved_router_history_page':'filtered_recent_overview',displayed_rows:rows.length,complete_history_export:false,search:$('search').value,direction:$('direction').value,review:$('review').value,source:$('source').value};
+ if(inHistory()){scope.offset=historyPage.offset;scope.limit=historyPage.limit;scope.total_matches=historyPage.total_matches;scope.collector_checked_at=historyPage.collector_checked_at}
+ const exported={connections:rows,report_scope:scope};
+ for(const key of ['schema_version','generated_at','network_id','network_binding_sha256','sources','capabilities','partial_coverage','truncation'])if(Object.hasOwn(latest,key))exported[key]=latest[key];
+ const report={snapshot:exported,annotations:pageAnnotations};
+ const blob=new Blob([JSON.stringify(report,null,2)],{type:'application/json'});
+ if(blob.size>MAX_REPORT_BYTES){$('error').textContent='Report exceeds the 4 MiB download limit. Narrow the current view before downloading.';return}
+ const u=URL.createObjectURL(blob),a=document.createElement('a');a.href=u;a.download=inHistory()?'sentinel-router-history-page.json':'sentinel-recent-view.json';a.click();setTimeout(()=>URL.revokeObjectURL(u),1000);
+}
+$('export').onclick=exportReport;
+(async()=>{try{csrf=(await api('/api/session')).csrf_token;await refresh();setInterval(()=>{if(!paused&&!document.hidden&&!busy&&!historyBusy&&!saving)refresh()},10000)}catch(e){$('error').textContent=e.message}})();
 </script></body></html>'''

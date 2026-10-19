@@ -139,7 +139,9 @@ def main(argv=None):
     tls.minimum_version = ssl.TLSVersion.TLSv1_2
     tls.load_cert_chain(STATE / 'server.crt', STATE / 'server.key')
     from .console_server import create_server
-    server = create_server(config, snapshot, ReviewStore(STATE / 'reviews.sqlite3'), tls)
+    from .console_history import HistoryReader
+    server = create_server(config, snapshot, ReviewStore(STATE / 'reviews.sqlite3'), tls,
+                           history_provider=HistoryReader())
     with server:
         server.serve_forever(poll_interval=.5)
 

@@ -12,6 +12,10 @@ The EA7300 manual documents website/schedule controls, traffic prioritization an
 
 An endpoint snapshot describes that host and its observation namespace. It can miss short connections and inaccessible owners. Router evidence alone cannot verify the application executable on another device. Application recognition, endpoint permission and enforcement remain separate decisions.
 
+The console's recent overview is bounded. **Browse all saved router history** separately searches and pages through the full context-bound archive retained by the collector, with matching counts and 50 rows per page. This exposes retained observations beyond the overview without claiming new traffic coverage, live sessions or an unlimited retention period. Downloading a report exports the displayed view/page only. No annotation means **Not reviewed**, shown as amber REVIEW independently of evidence severity; **Kept unrecognized**, **Investigate** and **Recognized by you** are explicit assessments. Evidence warnings remain visible after recognition, and INFO is never a permission or safety verdict.
+
+Each history request uses one consistent sanitized generation. Collection and scheduled refresh can reorder subsequent pages; a page download is not a point-in-time full-archive export.
+
 ## Visibility depends on placement
 
 An ordinary switched LAN port does not receive all other devices' unicast traffic. A configured mirror/SPAN port or network TAP can provide copies of traffic traversing selected paths; it cannot copy traffic that never crosses those paths. A passive mirror provides observation, not automatic prevention. [Cisco switching and SPAN explanation](https://www.cisco.com/c/en/us/support/docs/switches/catalyst-6500-series-switches/10570-41.html)

@@ -12,6 +12,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import hmac
 import ipaddress
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -37,11 +38,74 @@ SESSION_SECONDS = 8 * 3600
 IDLE_SECONDS = 30 * 60
 DECISIONS = frozenset(('recognize', 'unrecognized', 'investigate'))
 ID = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}\Z')
+HISTORY_SUMMARY_FIELDS = frozenset(('available', 'state', 'generated_at', 'collector_checked_at',
+                                  'raw_retained_count', 'total_observations', 'row_errors', 'reason'))
+HISTORY_QUERY_FIELDS = frozenset(('offset', 'limit', 'search', 'direction', 'review'))
 SECRET_KEY = re.compile(r'password|passphrase|secret|token|credential|authorization|cookie|private.?key|^topic$|^base_url$|^salt$', re.I)
 
 
 class ConsoleError(ValueError):
     pass
+
+
+class HistoryFailure(RuntimeError):
+    def __init__(self, code):
+        self.code = code
+
+
+def _history_query(value):
+    return (isinstance(value, dict) and set(value) == HISTORY_QUERY_FIELDS
+            and type(value['offset']) is int and 0 <= value['offset'] <= 2 ** 63 - 1
+            and type(value['limit']) is int and 1 <= value['limit'] <= 100
+            and isinstance(value['search'], str) and len(value['search']) <= 200
+            and all(ord(char) >= 32 and ord(char) != 127 for char in value['search'])
+            and value['direction'] in ('all', 'vendor_outgoing', 'vendor_incoming')
+            and value['review'] in ('all', 'pending', 'unrecognized', 'investigate', 'recognize'))
+
+
+def _history_unavailable():
+    return {'available': False, 'state': 'unavailable', 'generated_at': None,
+            'collector_checked_at': None, 'raw_retained_count': None,
+            'total_observations': None, 'row_errors': None,
+            'reason': 'Retained router history is unavailable.'}
+
+
+def _history_summary(value):
+    if not isinstance(value, dict) or set(value) != HISTORY_SUMMARY_FIELDS:
+        raise HistoryFailure('E_HISTORY_DATA')
+    if (type(value['available']) is not bool or value['state'] not in ('ok', 'partial', 'stale', 'unavailable', 'error')
+            or not isinstance(value['reason'], str) or len(value['reason']) > 1000):
+        raise HistoryFailure('E_HISTORY_DATA')
+    for name in ('generated_at', 'collector_checked_at'):
+        item = value[name]
+        try:
+            valid = item is None or (type(item) in (int, float) and math.isfinite(item) and item >= 0)
+        except OverflowError:
+            valid = False
+        if not valid:
+            raise HistoryFailure('E_HISTORY_DATA')
+    for name in ('raw_retained_count', 'total_observations', 'row_errors'):
+        item = value[name]
+        if item is None and not value['available']:
+            continue
+        if type(item) is not int or not 0 <= item <= 2 ** 63 - 1:
+            raise HistoryFailure('E_HISTORY_DATA')
+    try:
+        _json(value, reject_credentials=True)
+    except ConsoleError:
+        raise HistoryFailure('E_HISTORY_DATA') from None
+    return value
+
+
+def _history_context(snapshot):
+    sources = snapshot.get('sources', {})
+    guard = sources.get('guard', {}) if isinstance(sources, dict) else {}
+    return (isinstance(guard, dict) and guard.get('matches') is True and guard.get('state') == 'ok'
+            and isinstance(snapshot.get('network_id'), str) and ID.fullmatch(snapshot['network_id']) is not None
+            and guard.get('network_id') == snapshot['network_id']
+            and isinstance(snapshot.get('network_binding_sha256'), str)
+            and re.fullmatch(r'[0-9a-f]{64}', snapshot['network_binding_sha256']) is not None
+            and guard.get('binding_sha256') == snapshot['network_binding_sha256'])
 
 
 def validate_config(config):
@@ -108,12 +172,13 @@ class ConsoleApp:
     store.annotations() -> dict; store.update_review(id, decision, note) -> dict.
     Annotation decisions express recognition/review only, never endpoint access.
     """
-    def __init__(self, config, provider, state_store, auth, *, clock=time.monotonic):
+    def __init__(self, config, provider, state_store, auth, *, clock=time.monotonic, history_provider=None):
         self.config = validate_config(config)
         self.origin = 'https://' + self.config['bind'] + ':8443'
         self.host = urlsplit(self.origin).netloc
         self.network = ipaddress.IPv4Network(self.config['allowed_cidr'])
         self.provider, self.store, self.auth, self.clock = provider, state_store, auth, clock
+        self.history = history_provider
         self.sessions = {}
         self.failures = deque()
         self.lock = threading.RLock()
@@ -159,6 +224,72 @@ class ConsoleApp:
         _json(value, reject_credentials=True)
         return value, ids
 
+    def _annotations(self):
+        value = self.store.annotations()
+        if not isinstance(value, dict):
+            raise ConsoleError('E_ANNOTATIONS')
+        _json(value, reject_credentials=True)
+        return value
+
+    def _history_call(self, method, *args):
+        if self.history is None:
+            raise HistoryFailure('E_HISTORY_UNAVAILABLE')
+        try:
+            return getattr(self.history, method)(*args)
+        except Exception:
+            raise HistoryFailure('E_HISTORY_UNAVAILABLE') from None
+
+    def _history_page(self, query, annotations, snapshot):
+        value = self._history_call('page', query, annotations, snapshot)
+        fields = HISTORY_SUMMARY_FIELDS | {'rows', 'total_matches', 'offset', 'limit', 'has_more'}
+        if not isinstance(value, dict) or set(value) != fields:
+            raise HistoryFailure('E_HISTORY_DATA')
+        summary = _history_summary({key: value[key] for key in HISTORY_SUMMARY_FIELDS})
+        if not summary['available']:
+            raise HistoryFailure('E_HISTORY_UNAVAILABLE')
+        rows = value['rows']
+        if (not isinstance(rows, list) or len(rows) > query['limit']
+                or type(value['total_matches']) is not int or not 0 <= value['total_matches'] <= 2 ** 63 - 1
+                or type(value['offset']) is not int or value['offset'] != query['offset']
+                or type(value['limit']) is not int or value['limit'] != query['limit']
+                or type(value['has_more']) is not bool
+                or value['has_more'] != (query['offset'] + len(rows) < value['total_matches'])
+                or len(rows) > max(0, value['total_matches'] - query['offset'])):
+            raise HistoryFailure('E_HISTORY_DATA')
+        ids = set()
+        for row in rows:
+            ident = row.get('id') if isinstance(row, dict) else None
+            if (not isinstance(ident, str) or ID.fullmatch(ident) is None or ident in ids
+                    or row.get('source') != 'router' or row.get('state') != 'history'
+                    or row.get('transport') != 'unknown'
+                    or row.get('direction') not in ('vendor_outgoing', 'vendor_incoming')
+                    or row.get('network_id') != snapshot.get('network_id')):
+                raise HistoryFailure('E_HISTORY_DATA')
+            for name in ('source_address', 'destination_address'):
+                if name not in row or (row[name] is not None and (not isinstance(row[name], str) or len(row[name]) > 253)):
+                    raise HistoryFailure('E_HISTORY_DATA')
+            for name in ('source_port', 'destination_port'):
+                if name not in row or (row[name] is not None and (type(row[name]) is not int or not 0 <= row[name] <= 65535)):
+                    raise HistoryFailure('E_HISTORY_DATA')
+            for name in ('summary', 'reason', 'next_step'):
+                if not isinstance(row.get(name), str) or len(row[name]) > 2000:
+                    raise HistoryFailure('E_HISTORY_DATA')
+            if not isinstance(row.get('flags'), list) or len(row['flags']) > 16:
+                raise HistoryFailure('E_HISTORY_DATA')
+            observed = row.get('observed_at')
+            try:
+                valid = type(observed) in (int, float) and math.isfinite(observed) and observed >= 0
+            except OverflowError:
+                valid = False
+            if not valid:
+                raise HistoryFailure('E_HISTORY_DATA')
+            ids.add(ident)
+        try:
+            _json(value, reject_credentials=True)
+        except ConsoleError:
+            raise HistoryFailure('E_HISTORY_DATA') from None
+        return value, ids
+
     def _session(self, headers, peer):
         now = self.clock()
         self.sessions = {key: value for key, value in self.sessions.items()
@@ -180,6 +311,8 @@ class ConsoleApp:
                 return self._dispatch(method, target, headers, body, client_ip)
             except ConsoleError:
                 return self.response(400, {'error': 'E_REQUEST'})
+            except HistoryFailure as error:
+                return self.response(503, {'error': error.code})
             except Exception:
                 return self.response(503, {'error': 'E_OPERATION'})
 
@@ -264,11 +397,14 @@ class ConsoleApp:
                 return self.response(200, {'ok': True, 'csrf_token': session['csrf']})
             if path == '/api/snapshot':
                 snapshot, _ = self._snapshot()
-                annotations = self.store.annotations()
-                if not isinstance(annotations, dict):
-                    raise ConsoleError('E_ANNOTATIONS')
-                _json(annotations, reject_credentials=True)
-                return self.response(200, {'snapshot': snapshot, 'annotations': annotations})
+                annotations = self._annotations()
+                result = {'snapshot': snapshot, 'annotations': annotations}
+                if self.history is not None:
+                    try:
+                        result['history'] = _history_summary(self._history_call('summary', snapshot, annotations))
+                    except HistoryFailure:
+                        result['history'] = _history_unavailable()
+                return self.response(200, result)
             return self.response(404, {'error': 'E_NOT_FOUND'})
         if not hmac.compare_digest(values.get('x-csrf-token', ''), session['csrf']):
             return self.response(403, {'error': 'E_CSRF'})
@@ -276,6 +412,14 @@ class ConsoleApp:
             self.sessions.pop(ident, None)
             return self.response(200, {'ok': True}, {
                 'Set-Cookie': COOKIE + '=; Secure; HttpOnly; SameSite=Strict; Path=/; Max-Age=0'})
+        if path == '/api/history':
+            if not _history_query(data):
+                return self.response(400, {'error': 'E_HISTORY_QUERY'})
+            snapshot, _ = self._snapshot()
+            annotations = self._annotations()
+            history, ids = self._history_page(data, annotations, snapshot)
+            return self.response(200, {'history': history,
+                                      'annotations': {key: annotations[key] for key in ids if key in annotations}})
         if path == '/api/review':
             if set(data) != {'id', 'decision', 'note'}:
                 raise ConsoleError('E_REVIEW')
@@ -285,9 +429,14 @@ class ConsoleApp:
                     or not isinstance(note, str) or len(note) > 500
                     or any(ord(char) < 32 or ord(char) == 127 for char in note)):
                 raise ConsoleError('E_REVIEW')
-            _, ids = self._snapshot()
+            snapshot, ids = self._snapshot()
             if ident not in ids:
-                return self.response(409, {'error': 'E_STALE_REVIEW'})
+                present = (self._history_call('contains', ident, snapshot)
+                           if self.history is not None and _history_context(snapshot) else False)
+                if type(present) is not bool:
+                    raise HistoryFailure('E_HISTORY_DATA')
+                if not present:
+                    return self.response(409, {'error': 'E_STALE_REVIEW'})
             annotation = self.store.update_review(ident, decision, note)
             if not isinstance(annotation, dict):
                 raise ConsoleError('E_ANNOTATIONS')
@@ -375,7 +524,7 @@ class _TLSServer(ThreadingMixIn, HTTPServer):
         pass
 
 
-def create_server(config, provider, state_store, tls_context):
+def create_server(config, provider, state_store, tls_context, *, history_provider=None):
     """Return a bounded HTTPS server. Caller owns serve_forever/shutdown lifecycle."""
     config = validate_config(config)
     if os.name == 'posix' and os.geteuid() == 0:
@@ -384,7 +533,7 @@ def create_server(config, provider, state_store, tls_context):
             or tls_context.minimum_version < ssl.TLSVersion.TLSv1_2):
         raise ConsoleError('E_TLS_CONTEXT')
     auth = PasswordAuth(config['auth_path'])
-    app = ConsoleApp(config, provider, state_store, auth)
+    app = ConsoleApp(config, provider, state_store, auth, history_provider=history_provider)
 
     class Handler(BaseHTTPRequestHandler):
         server_version = 'Sentinel'; sys_version = ''

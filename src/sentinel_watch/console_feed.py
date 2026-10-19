@@ -1,6 +1,6 @@
 """Privileged, one-shot read-only collection for the unprivileged console.
 
-Only the bounded snapshot is published. No commands, DNS lookups, router calls,
+The bounded snapshot and sanitized retained-history handoff are published. No commands, DNS lookups, router calls,
 credentials, payloads, process arguments or environments are collected here.
 Interface byte counters describe this host, never household or per-flow totals.
 """
@@ -671,6 +671,8 @@ def main(argv=None):
         config = load_config(args.config)
         previous = read_previous(gid=gid)
         snapshot = build_snapshot(previous=previous, **config)
+        from .console_history import export_history
+        snapshot['sources']['history'] = export_history(config['router_state'], snapshot, gid=gid)
         publish(snapshot, gid=gid)
         return 0
     except Exception:
