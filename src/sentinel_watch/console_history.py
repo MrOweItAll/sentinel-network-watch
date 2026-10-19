@@ -240,7 +240,10 @@ def export_history(router_state, snapshot, path=HISTORY_PATH, *, gid, uid=0, now
         code = str(error) if isinstance(error, HistoryError) else 'E_HISTORY_EXPORT'
         if clock() > deadline:
             code = 'E_HISTORY_RUNTIME_LIMIT'
-        elif getattr(error, 'sqlite_errorcode', None) == sqlite3.SQLITE_FULL:
+        # SQLITE_FULL is stable code 13. Python 3.10 exposes neither the module
+        # constant nor sqlite_errorcode, so retain SQLite's exact legacy message.
+        elif (getattr(error, 'sqlite_errorcode', None) == 13 or
+              isinstance(error, sqlite3.OperationalError) and str(error) == 'database or disk is full'):
             code = 'E_HISTORY_OUTPUT_LIMIT'
         result = unavailable('Retained-history export did not complete: ' + code, 'unavailable' if code in
                              ('E_HISTORY_CONTEXT', 'E_HISTORY_DISABLED', 'E_HISTORY_BUSY') else 'error')

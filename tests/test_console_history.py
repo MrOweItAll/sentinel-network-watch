@@ -191,6 +191,18 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual(self.reader().summary(self.snapshot, {})['total_observations'], 2)
         self.assertFalse(self.reader().contains(self.expected_id(624), self.snapshot))
 
+    def test_legacy_sqlite_without_constants_or_exception_codes_preserves_failure(self):
+        self.export(); before = self.path.read_bytes()
+        legacy = SimpleNamespace(connect=sqlite3.connect, OperationalError=sqlite3.OperationalError)
+        with mock.patch.object(history, 'sqlite3', legacy), mock.patch.object(history, 'MAX_SOURCE_ROWS', 10):
+            result = self.export()
+        self.assertIn('E_HISTORY_ROW_LIMIT', result['reason'])
+        legacy.connect = mock.Mock(side_effect=sqlite3.OperationalError('database or disk is full'))
+        with mock.patch.object(history, 'sqlite3', legacy):
+            result = self.export()
+        self.assertIn('E_HISTORY_OUTPUT_LIMIT', result['reason'])
+        self.assertEqual(before, self.path.read_bytes())
+
     @unittest.skipUnless(os.name == 'posix', 'Pinned-fd replacement semantics require POSIX; sequential replacement is tested everywhere.')
     def test_reader_in_progress_keeps_its_old_inode_across_atomic_replacement(self):
         self.export()
