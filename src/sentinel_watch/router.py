@@ -185,10 +185,13 @@ def log_page(output, index=FIRST_INDEX, kind='outgoing'):
     fields = {'incoming': {'source', 'destinationPort'},
               'outgoing': {'source', 'destination', 'destinationPort', 'service'},
               'security': {'ipAddress', 'macAddress', 'timestamp', 'authSucceeded'}}[kind]
+    # Outgoing service is an optional display label. Preserve its absence and
+    # the original row; a present value must still be a bounded string.
+    required = fields - {'service'} if kind == 'outgoing' else fields
     rows = output['entries']
     need(len(rows) <= PAGE_SIZE, 'E_LOG_SCHEMA')
     for row in rows:
-        need(isinstance(row, dict) and set(row) == fields, 'E_LOG_ROW_SCHEMA')
+        need(isinstance(row, dict) and required <= set(row) <= fields, 'E_LOG_ROW_SCHEMA')
         for field, value in row.items():
             if field == 'destinationPort':
                 need(type(value) is int and 0 <= value <= 65535, 'E_LOG_ROW_SCHEMA')

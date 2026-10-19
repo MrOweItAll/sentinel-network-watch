@@ -29,6 +29,64 @@ def device(name):
     return {'deviceID': name, 'ipAddresses': ['192.0.2.10']}
 
 
+class LogSchemaTests(unittest.TestCase):
+    def test_optional_service_is_preserved_without_defaults(self):
+        missing = {key: value for key, value in ROW.items() if key != 'service'}
+        rows = [missing, dict(ROW, service=''), ROW.copy(), dict(ROW, service='x' * 8192)]
+        before = json.dumps(rows, sort_keys=True)
+        parsed, next_index, complete = r.log_page({'entries': rows})
+        self.assertIs(parsed, rows)
+        self.assertTrue(all(parsed[index] is row for index, row in enumerate(rows)))
+        self.assertEqual(json.dumps(parsed, sort_keys=True), before)
+        self.assertNotIn('service', parsed[0])
+        self.assertIsNone(next_index)
+        self.assertFalse(complete)
+
+    def test_present_service_remains_bounded_string(self):
+        for value in (None, 0, False, [], {}, 'x' * 8193):
+            with self.subTest(type=type(value).__name__), self.assertRaisesRegex(r.SafeError, '^E_LOG_ROW_SCHEMA$'):
+                r.log_page({'entries': [dict(ROW, service=value)]})
+
+    def test_required_fields_and_unknown_keys_still_rejected(self):
+        for field in ('source', 'destination', 'destinationPort'):
+            for service_present in (True, False):
+                row = {key: value for key, value in ROW.items()
+                       if key != field and (service_present or key != 'service')}
+                with self.subTest(field=field, service_present=service_present), self.assertRaisesRegex(r.SafeError, '^E_LOG_ROW_SCHEMA$'):
+                    r.log_page({'entries': [row]})
+        with self.assertRaisesRegex(r.SafeError, '^E_LOG_ROW_SCHEMA$'):
+            r.log_page({'entries': [dict(ROW, unexpected='not accepted')]})
+
+    def test_port_types_and_bounds_are_unchanged(self):
+        for value in (None, False, '443', -1, 65536, 443.0):
+            with self.subTest(value=value), self.assertRaisesRegex(r.SafeError, '^E_LOG_ROW_SCHEMA$'):
+                r.log_page({'entries': [dict(ROW, destinationPort=value)]})
+        for value in (0, 65535):
+            row = dict(ROW, destinationPort=value)
+            self.assertEqual(r.log_page({'entries': [row]})[0], [row])
+
+    def test_other_log_kind_field_contracts_remain_exact(self):
+        incoming = {'source': '192.0.2.10', 'destinationPort': 443}
+        security = {'ipAddress': '192.0.2.10', 'macAddress': '02:00:00:00:00:01',
+                    'timestamp': 123456, 'authSucceeded': False}
+        for kind, row in (('incoming', incoming), ('security', security)):
+            self.assertEqual(r.log_page({'entries': [row]}, kind=kind)[0], [row])
+            for field in row:
+                partial = {key: value for key, value in row.items() if key != field}
+                with self.subTest(kind=kind, field=field), self.assertRaisesRegex(r.SafeError, '^E_LOG_ROW_SCHEMA$'):
+                    r.log_page({'entries': [partial]}, kind=kind)
+            with self.subTest(kind=kind), self.assertRaisesRegex(r.SafeError, '^E_LOG_ROW_SCHEMA$'):
+                r.log_page({'entries': [dict(row, service='HTTPS')]}, kind=kind)
+
+    def test_malformed_member_rejects_whole_page_without_mutation(self):
+        rows = [{key: value for key, value in ROW.items() if key != 'service'},
+                dict(ROW, service=None)]
+        before = json.dumps(rows, sort_keys=True)
+        with self.assertRaisesRegex(r.SafeError, '^E_LOG_ROW_SCHEMA$'):
+            r.log_page({'entries': rows})
+        self.assertEqual(json.dumps(rows, sort_keys=True), before)
+
+
 class Fixtures(unittest.TestCase):
     def setUp(self):
         if os.name == 'nt':
@@ -127,6 +185,31 @@ class Fixtures(unittest.TestCase):
         self.assertEqual(stored['candidate_class'], 'unknown')
         self.assertIsNone(stored['router_timestamp_json'])
         self.assertEqual(self.store.pending_notices(), [])
+
+    def test_missing_service_does_not_raise_false_collection_health_alert(self):
+        row = {key: value for key, value in ROW.items() if key != 'service'}
+        for _ in range(3):
+            status = self.poll(outgoing=[row])
+            self.assertTrue(status['ok'])
+            self.assertEqual(status['collection_health'], 'healthy')
+            self.assertEqual(status['raw_unprocessed_snapshots'], 0)
+            self.assertEqual(status['gaps'], [])
+        stored = self.store.db.execute('SELECT raw_json,poll_sightings FROM observations WHERE kind=?', ('outgoing',)).fetchone()
+        self.assertEqual(json.loads(stored['raw_json']), row)
+        self.assertNotIn('service', json.loads(stored['raw_json']))
+        self.assertEqual(stored['poll_sightings'], 3)
+        self.assertEqual(self.store.pending_notices(), [])
+
+    def test_mixed_invalid_page_stays_unprocessed_without_partial_ingest(self):
+        rows = [{key: value for key, value in ROW.items() if key != 'service'},
+                dict(ROW, service=None)]
+        for _ in range(2):
+            status = self.poll(outgoing=rows)
+        self.assertFalse(status['ok'])
+        self.assertEqual(status['raw_unprocessed_snapshots'], 2)
+        self.assertEqual(status['gaps'], [{'source': 'outgoing', 'code': 'E_LOG_ROW_SCHEMA'}])
+        self.assertEqual(self.store.db.execute('SELECT COUNT(*) FROM observations').fetchone()[0], 0)
+        self.assertEqual([notice['category'] for notice in self.store.pending_notices()], ['router_collection_degraded'])
 
     def test_inventory_baseline_then_two_polls_and_cooldown(self):
         self.poll(devices=[device('baseline')])
