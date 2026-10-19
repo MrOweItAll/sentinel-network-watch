@@ -21,4 +21,7 @@ jobs:
           python-version: ${{ matrix.python }}
       - run: python -m pip install .
       - run: python -B -m unittest discover -s tests -v
+      - name: Verify real loopback HTTPS boundary
+        if: runner.os == 'Linux'
+        run: python -B tests/linux_console_acceptance.py --source-root "$GITHUB_WORKSPACE/src"
       - run: sentinel-network-watch --version
